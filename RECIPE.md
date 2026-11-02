@@ -18,8 +18,11 @@ Left to right, the same frame as Herdr's `main` layout:
   - **Spaces** (shipped `spaces` mod).
   - **Agents** (`ide-agents`): Herdr's agents list. Grouped by space, a repo with git worktree
     spaces gets a header named after the repo, and each checkout under it (the main one
-    first, then every worktree, even a lone one) is an indented subgroup with a branch
-    icon. A repo without worktrees stays one plain group. Under each Claude Code / Codex agent,
+    first, then every worktree, even a lone one) is an indented subgroup labeled with the
+    checkout's folder name after a `folder-git-2` worktree icon, in the theme's `ansi4`
+    (blue), then its branch (or short commit when detached) after a `git-branch` icon, in
+    `ansi5` (magenta); hovering shows both in full. A repo without worktrees stays one
+    plain group. Under each Claude Code / Codex agent,
     its running subagents as tree rows (26px, 12.5px text, `├`/`└` lines in the theme's
     `input` color): the subagent's task, how long it has run (`2m`), and a spinner.
   - **Footer** (`ide-chrome` with `{footer: true}`): Settings, Add machine.
@@ -88,7 +91,8 @@ Left to right, the same frame as Herdr's `main` layout:
     children from `thread_spawn_edges` (nickname, `agent_path`), status from the last row
     of `thread_turns` in `thread_history_1.sqlite`; both opened read-only.
   Worktrees: `git rev-parse --git-common-dir` / `--show-toplevel` on each space's
-  folder (its first terminal's live `cwd`), as the shipped `spaces` mod does.
+  folder (its first terminal's live `cwd`), as the shipped `spaces` mod does; the branch
+  from `git symbolic-ref --short -q HEAD`, else `git rev-parse --short HEAD`.
 - `ide-chrome`: the shipped `workspace-chrome` with `fitBrand()` resizing `brand`.
 - Programs: `mmdc` (`@mermaid-js/mermaid-cli`), `python3`, `sips` (macOS), `sh`.
   Icons: its own SVGs plus the shipped `workspace-chrome` icons used by `ide-agents`.
@@ -110,6 +114,8 @@ Left to right, the same frame as Herdr's `main` layout:
 - Diagram sizing uses `sips`, so mermaid previews are macOS-only as built.
 - Without the Claude hook, two Claude terminals in the same folder show the same
   session's subagents.
+- `flex_shrink(value)` needs a number (`flex_shrink_1()` doesn't); `herdr-app check` won't
+  catch it in rows that only draw once the git answer arrives — look at the window.
 - Editor panes are read-only; tabs can't be dragged between panes.
 
 ## Done when

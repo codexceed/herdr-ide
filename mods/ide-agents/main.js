@@ -112,9 +112,14 @@ export default class Agents extends View {
           const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
           const common = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, on });
           if (top.code !== 0 || common.code !== 0) throw new Error("not a repo");
+          // The checked-out branch, or the short commit when detached.
+          const ref = await exec("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd, on });
+          const sha = ref.code === 0 ? null : await exec("git", ["rev-parse", "--short", "HEAD"], { cwd, on });
+          const branch = ref.code === 0 ? ref.stdout.trim() : sha?.code === 0 ? sha.stdout.trim() : null;
           const repo = common.stdout.trim();
           const name = repo.endsWith("/.git") ? baseName(repo.slice(0, -5)) : baseName(repo).replace(/\.git$/, "");
-          this.repos[key] = { repo: JSON.stringify([on, repo]), name, linked: repo !== `${top.stdout.trim()}/.git` };
+          this.repos[key] = { repo: JSON.stringify([on, repo]), name, linked: repo !== `${top.stdout.trim()}/.git`,
+            dir: baseName(top.stdout.trim()), branch };
         } catch { this.repos[key] = null; }
         finally { this.asking.delete(key); cx.notify(); }
       });
@@ -530,8 +535,15 @@ export default class Agents extends View {
           open ? this.folded.add(g.id) : this.folded.delete(g.id);
           cx.notify();
         })
-        .when(Boolean(g.sub), (el) => el.child(svg("mods/workspace-chrome/branch.svg").size(12).flex_none().text_color(t.dim)))
-        .child(div().truncate().text_color(t[g.status] ?? t.dim).child(g.label))
+        // A checkout under its repo: worktree folder (blue) and branch (magenta), each with its icon.
+        .when(Boolean(g.sub), (el) => el
+          .tooltip([g.git?.dir, g.git?.branch].filter(Boolean).join(" · "))
+          .child(svg("mods/ide-agents/worktree.svg").size(12).flex_none().text_color(t.ansi4))
+          .child(div().flex_shrink_1().min_w(0).truncate().text_color(t.ansi4).child(g.git?.dir ?? g.label))
+          .when(Boolean(g.git?.branch), (el) => el
+            .child(svg("mods/workspace-chrome/git-branch.svg").size(11).flex_none().ml(4).text_color(t.ansi5))
+            .child(div().flex_shrink_1().min_w(0).truncate().text_color(t.ansi5).child(g.git.branch))))
+        .when(!g.sub, (el) => el.child(div().truncate().text_color(t[g.status] ?? t.dim).child(g.label)))
         .when(byPriority || !open, (el) => el.child(div().text_color(t.dim).child(String(all.length))))
         .child(div().flex_1())
         .when(!open, (el) => el
