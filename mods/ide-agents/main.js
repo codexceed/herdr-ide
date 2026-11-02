@@ -122,8 +122,9 @@ export default class Agents extends View {
     return undefined;
   }
 
-  // Grouped by space: each worktree space's group goes under its repo's, even a lone one.
-  // The repo's own space heads them; without one, a header named after the repo does.
+  // Grouped by space: a repo with worktree spaces gets a header named after the repo, and
+  // every checkout under it (the main one first, then each worktree, even a lone one) is a
+  // labeled subgroup with a branch icon. A repo without worktrees stays one plain group.
   nestWorktrees(groups, cx) {
     const ps = panes(), byId = new Map(spaces().map((s) => [s.id, s]));
     const info = (g) => (g.space && byId.has(g.space) ? this.repoOf(byId.get(g.space), ps, cx) : null);
@@ -145,8 +146,13 @@ export default class Agents extends View {
         place(g.git.repo, head);
         continue;
       }
+      if (g.git && kidsOf(g.git.repo).length && !placed.has(g.git.repo)) {
+        const head = { id: `repo-${g.git.repo}`, label: g.git.name, status: null, members: [], repoHead: true };
+        out.push(head, { ...g, sub: true, under: head.id });
+        place(g.git.repo, head);
+        continue;
+      }
       out.push(g);
-      if (g.git) place(g.git.repo, g);
     }
     // A worktree whose repo header got placed later still needs a home: anything left goes last.
     for (const g of groups) if (!out.some((o) => o.id === g.id)) out.push(g);
