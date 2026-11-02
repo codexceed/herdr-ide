@@ -47,7 +47,8 @@ export default class EditorGroup extends View {
     this.gid = props()?.group ?? newId();
     this.docs = new Map(); // tab key -> { text, code, error, loading }
     this.handle = cx.focus_handle();
-    this.claimPane = true; // a new group is split in focused; learn our pane id from focus
+    this.pane = this.group().pane;
+    this.claimPane = false; // restored background groups must not claim global focus
     // props.seed = { tabs: [{ path, on }], active?, preview? } fills a brand-new group.
     const seed = props()?.seed;
     this.edit(g => {
@@ -128,20 +129,26 @@ export default class EditorGroup extends View {
     const k = keyOf(tab);
     const d = this.docs.get(k) ?? { loading: true };
     this.docs.set(k, d);
+    d.loading = true;
+    const fail = message => {
+      d.code?.release();
+      d.code = null; d.text = null; d.error = message;
+    };
     cx.spawn(async cx => {
       try {
         const text = await readTextFile(tab.path, { on: tab.on });
-        if (text === null) { d.error = "This file is no longer available"; return; }
-        if (text.includes("\0")) { d.error = "Binary file · no text preview"; return; }
+        if (text === null) { fail("This file is no longer available"); return; }
+        if (text.includes("\0")) { fail("Binary file · no text preview"); return; }
         if (text === d.text) return;
         const t = theme(), ext = tab.path.includes(".") ? tab.path.split(".").pop() : "txt";
         d.code?.release();
+        d.code = null;
         d.text = text; d.error = null;
         d.code = EditorState.new({ language: LANG[ext] ?? ext, readonly: true,
           value: text.length > 400000 ? text.slice(0, 400000) + "\n… (file truncated)" : text,
           font_family: settings().font_family, font_size: 12,
           syntax: { keyword: t.ansi5, string: t.ansi2, comment: t.dim, function: t.ansi4, type: t.ansi3, number: t.ansi1, constant: t.ansi6 } });
-      } catch { d.error = "Cannot open this file (binary, too large, or unreadable)"; }
+      } catch { fail("Cannot open this file (binary, too large, or unreadable)"); }
       finally { d.loading = false; cx.notify(); }
     });
   }
@@ -222,7 +229,7 @@ export default class EditorGroup extends View {
 
   render(cx) {
     // Our pane id isn't a prop; learn it from focus right after we were clicked or created.
-    if (this.claimPane) {
+    if (this.claimPane || this.handle.is_focused()) {
       const f = focused()?.pane, p = f && panes().find(x => x.pane === f);
       if (p?.mod === MOD) {
         this.claimPane = false;
