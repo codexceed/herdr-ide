@@ -16,6 +16,13 @@ function find(node, id) {
 }
 
 // The sidebar's rail goes by its width, not a flag: dragging its edge narrows it too.
+// Where a space is now (as the spaces mod decides): its first terminal's live folder, else where it was made.
+function placeOf(s, ps) {
+  const tabs = new Set((s.tabs ?? []).map((c) => c.id));
+  return JSON.stringify([s.machine ?? null, ps.find((p) => tabs.has(p.tab) && p.cwd)?.cwd || s.folder || null]);
+}
+const baseName = (path) => path.replace(/\/+$/, "").split("/").pop();
+
 const narrow = () => (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
 
 // To the rail (on macOS wide enough for the traffic lights), or back to the width it had.
@@ -86,6 +93,64 @@ export default class Agents extends View {
     this.swarmJson = "{}";
     this.pollSwarm(cx);
     cx.timer.every(3000, (cx) => this.pollSwarm(cx));
+    // Each place's repo, to nest worktree spaces under their repo: { place: {repo, name, linked} | null }.
+    this.repos = {};
+    this.asking = new Set();
+    cx.timer.every(30000, (cx) => { this.repos = {}; cx.notify(); });
+  }
+
+  // A space's repo (the git common dir) and whether it's a linked worktree, asked once per place.
+  repoOf(space, ps, cx) {
+    const key = placeOf(space, ps);
+    if (key in this.repos) return this.repos[key];
+    if (!this.asking.has(key)) {
+      this.asking.add(key);
+      const [on, cwd] = JSON.parse(key);
+      cx.spawn(async (cx) => {
+        try {
+          if (!cwd) throw new Error("no folder");
+          const top = await exec("git", ["rev-parse", "--show-toplevel"], { cwd, on });
+          const common = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, on });
+          if (top.code !== 0 || common.code !== 0) throw new Error("not a repo");
+          const repo = common.stdout.trim();
+          const name = repo.endsWith("/.git") ? baseName(repo.slice(0, -5)) : baseName(repo).replace(/\.git$/, "");
+          this.repos[key] = { repo: JSON.stringify([on, repo]), name, linked: repo !== `${top.stdout.trim()}/.git` };
+        } catch { this.repos[key] = null; }
+        finally { this.asking.delete(key); cx.notify(); }
+      });
+    }
+    return undefined;
+  }
+
+  // Grouped by space: each worktree space's group goes under its repo's, even a lone one.
+  // The repo's own space heads them; without one, a header named after the repo does.
+  nestWorktrees(groups, cx) {
+    const ps = panes(), byId = new Map(spaces().map((s) => [s.id, s]));
+    const info = (g) => (g.space && byId.has(g.space) ? this.repoOf(byId.get(g.space), ps, cx) : null);
+    for (const g of groups) g.git = info(g);
+    const mains = new Map(groups.filter((g) => g.git && !g.git.linked).map((g) => [g.git.repo, g]));
+    const kidsOf = (repo) => groups.filter((g) => g.git?.linked && g.git.repo === repo);
+    const out = [], placed = new Set();
+    const place = (repo, parent) => {
+      if (placed.has(repo)) return;
+      placed.add(repo);
+      const kids = kidsOf(repo);
+      kids.forEach((k, n) => out.push({ ...k, sub: true, under: parent.id, last: n === kids.length - 1 }));
+    };
+    for (const g of groups) {
+      if (g.git?.linked) {
+        if (mains.has(g.git.repo) || placed.has(g.git.repo)) continue;
+        const head = { id: `repo-${g.git.repo}`, label: g.git.name, status: null, members: [], repoHead: true };
+        out.push(head);
+        place(g.git.repo, head);
+        continue;
+      }
+      out.push(g);
+      if (g.git) place(g.git.repo, g);
+    }
+    // A worktree whose repo header got placed later still needs a home: anything left goes last.
+    for (const g of groups) if (!out.some((o) => o.id === g.id)) out.push(g);
+    return out;
   }
 
   pollSwarm(cx) {
@@ -433,16 +498,19 @@ export default class Agents extends View {
       const r = rankOf(a) || RANK.idle;
       const id = byPriority ? `sec-${r}` : `sp-${a.space}`;
       if (groups.at(-1)?.id === id) groups.at(-1).members.push(a);
-      else groups.push({ id, label: byPriority ? SECTION[r] : a.space_name || "", status: byPriority ? SECTION_STATUS[r] : null, members: [a] });
+      else groups.push({ id, label: byPriority ? SECTION[r] : a.space_name || "", status: byPriority ? SECTION_STATUS[r] : null, members: [a], space: byPriority ? null : a.space });
     }
+    const shownGroups = byPriority ? groups : this.nestWorktrees(groups, cx);
 
     // A group's header; it folds the group. Folded, it says how many and the most urgent state.
     const header = (g) => {
       const open = !this.folded.has(g.id);
-      const top = g.members.reduce((m, a) => ((RANK[a.status] ?? 0) > (RANK[m] ?? 0) ? a.status : m), null);
+      const all = [...g.members, ...shownGroups.filter((k) => k.under === g.id).flatMap((k) => k.members)];
+      const top = all.reduce((m, a) => ((RANK[a.status] ?? 0) > (RANK[m] ?? 0) ? a.status : m), null);
       return h_flex()
         .id(g.id)
         .px(8)
+        .when(Boolean(g.sub), (el) => el.pl(18))
         .pt(8)
         .h(30)
         .flex_none()
@@ -456,8 +524,9 @@ export default class Agents extends View {
           open ? this.folded.add(g.id) : this.folded.delete(g.id);
           cx.notify();
         })
+        .when(Boolean(g.sub), (el) => el.child(svg("mods/workspace-chrome/branch.svg").size(12).flex_none().text_color(t.dim)))
         .child(div().truncate().text_color(t[g.status] ?? t.dim).child(g.label))
-        .when(byPriority || !open, (el) => el.child(div().text_color(t.dim).child(String(g.members.length))))
+        .when(byPriority || !open, (el) => el.child(div().text_color(t.dim).child(String(all.length))))
         .child(div().flex_1())
         .when(!open, (el) => el
           .when(!byPriority && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true)))
@@ -465,7 +534,9 @@ export default class Agents extends View {
     };
     const rows = collapsed
       ? list.flatMap(withKids)
-      : groups.flatMap((g) => [header(g), ...(this.folded.has(g.id) ? [] : g.members.flatMap(withKids))]);
+      : shownGroups.filter((g) => !(g.sub && this.folded.has(g.under)))
+          .flatMap((g) => [header(g), ...(this.folded.has(g.id) ? [] : g.members.flatMap(withKids)
+            .map((r) => (g.sub ? h_flex().w_full().flex_none().pl(14).child(r.flex_1().min_w(0)) : r)))]);
 
     return v_flex()
       .size_full()

@@ -16,7 +16,9 @@ Left to right, the same frame as Herdr's `main` layout:
     macOS, it grows to 78px so the toggle sits under the traffic lights; the toggle is
     always at the top, never at the bottom.
   - **Spaces** (shipped `spaces` mod).
-  - **Agents** (`ide-agents`): Herdr's agents list. Under each Claude Code / Codex agent,
+  - **Agents** (`ide-agents`): Herdr's agents list. Grouped by space, a git worktree's
+    space sits under its repo's group as an indented subgroup with a branch icon (a
+    header named after the repo stands in when the repo's own space has no agents). Under each Claude Code / Codex agent,
     its running subagents as tree rows (26px, 12.5px text, `├`/`└` lines in the theme's
     `input` color): the subagent's task, how long it has run (`2m`), and a spinner.
   - **Footer** (`ide-chrome` with `{footer: true}`): Settings, Add machine.
@@ -84,6 +86,8 @@ Left to right, the same frame as Herdr's `main` layout:
   - Codex: the newest top-level thread for the folder in `~/.codex/state_5.sqlite`,
     children from `thread_spawn_edges` (nickname, `agent_path`), status from the last row
     of `thread_turns` in `thread_history_1.sqlite`; both opened read-only.
+  Worktrees: `git rev-parse --git-common-dir` / `--show-toplevel` on each space's
+  folder (its first terminal's live `cwd`), as the shipped `spaces` mod does.
 - `ide-chrome`: the shipped `workspace-chrome` with `fitBrand()` resizing `brand`.
 - Programs: `mmdc` (`@mermaid-js/mermaid-cli`), `python3`, `sips` (macOS), `sh`.
   Icons: its own SVGs plus the shipped `workspace-chrome` icons used by `ide-agents`.
