@@ -58,9 +58,10 @@ export default class EditorGroup extends View {
     this.pane = this.group().pane;
     this.claimPane = false; // restored background groups must not claim global focus
     this.gen = 0; // bumped when this pane loses focus, to remount the preview's text
-    // props.seed = { tabs: [{ path, on }], active?, preview? } fills a brand-new group.
+    // props.seed = { tabs: [{ path, on }], active?, preview? } fills a brand-new group. Without
+    // a group prop (herdr-app check runs init too) nothing is saved until the pane is used.
     const seed = props()?.seed;
-    this.edit(g => {
+    if (props()?.group) this.edit(g => {
       if (seed?.tabs?.length && !g.tabs.length) {
         g.tabs = seed.tabs.map(t => ({ path: t.path, on: t.on ?? null }));
         g.active = seed.active ?? keyOf(g.tabs[0]); g.preview = seed.preview ?? [];

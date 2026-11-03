@@ -45,6 +45,17 @@ test('restored background groups keep their own pane and split there after Files
   assert.equal(state.calls.at(-1).args.pane, 'pane-b');
 });
 
+test('a copy opened without a group (herdr-app check) saves nothing', () => {
+  const { context } = harness();
+  const sandbox = { View: class {}, div: () => null, svg: () => null, image: () => null, v_flex: () => null, h_flex: () => null,
+    Editor: {}, TextView: {}, EditorState: {}, props: () => ({}), shared: () => undefined,
+    setShared: () => { throw new Error('saved'); }, focused: () => null, panes: () => [], run() {}, theme: () => ({}), settings: () => ({}), home: () => '/' };
+  const source = fs.readFileSync(path.join(__dirname, '../mods/ide-editor/main.js'), 'utf8')
+    .replace(/^import .*;\n/gm, '').replace('export default class EditorGroup', 'class EditorGroup');
+  const Group = vm.runInNewContext(source + '\nEditorGroup;', sandbox);
+  assert.doesNotThrow(() => new Group().init({}, context));
+});
+
 test('a group without a saved pane waits for its own activation', () => {
   const { state, group, context } = harness();
   const b = group('b');
