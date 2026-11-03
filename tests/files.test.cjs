@@ -10,6 +10,7 @@ function harness() {
     { pane: 'term-a', terminal: 't1', tab: 'tab', cwd: '/repo/a' },
     { pane: 'term-b', terminal: 't2', tab: 'tab', cwd: '/repo/b' },
     { pane: 'editor', terminal: null, mod: 'ide-editor', tab: 'tab', cwd: null },
+    { pane: 'term-c', terminal: 't3', tab: 'other', cwd: '/repo/c' },
   ];
   const sandbox = {
     View: class {}, div: () => null, svg: () => null, v_flex: () => null, h_flex: () => null, Editor: {}, EditorState: {},
@@ -27,6 +28,13 @@ function harness() {
 test('an editor pane keeps the folder of the terminal focused before it', () => {
   const { state, location } = harness();
   state.focus = 'term-b'; assert.equal(location().cwd, '/repo/b');
+  state.focus = 'editor'; assert.equal(location().cwd, '/repo/b');
+});
+
+test('each tab remembers its own last terminal', () => {
+  const { state, location } = harness();
+  state.focus = 'term-b'; location();
+  state.focus = 'term-c'; assert.equal(location().cwd, '/repo/c');
   state.focus = 'editor'; assert.equal(location().cwd, '/repo/b');
 });
 

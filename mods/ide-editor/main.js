@@ -226,13 +226,13 @@ export default class EditorGroup extends View {
 
   // The header's find matches for this pane: line number, then the line cut around the hit.
   findList(t) {
-    const f = shared(FIND);
-    if (!this.pane || f?.pane !== this.pane || !f.matches?.length) return null;
+    const f = shared(FIND)?.[this.pane];
+    if (!this.pane || !f?.matches?.length) return null;
     return v_flex().id("eg-find").flex_none().max_h(220).overflow_y_scrollbar().py(4).border_b(1).border_color(t.border)
       .bg(t.chrome).font_family(settings().font_family).text_size(12)
       .children(f.matches.map((m, i) => h_flex().id(`eg-find-${i}`).h(22).flex_none().px(10).gap(10).items_center().cursor_pointer()
         .bg(i === f.at ? t.selected : t.chrome).hover(s => s.bg(t.hover))
-        .on_click((_e, cx) => { setShared(FIND, { ...shared(FIND), at: i }); cx.notify(); })
+        .on_click((_e, cx) => { setShared(FIND, { ...shared(FIND), [this.pane]: { ...f, at: i } }); cx.notify(); })
         .child(div().w(40).flex_none().text_right().text_color(t.dim).child(String(m.n)))
         .child(h_flex().flex_1().min_w(0).overflow_hidden().whitespace_nowrap().text_color(t.muted)
           .child(div().flex_none().child(m.parts[0]))

@@ -3,7 +3,7 @@
 // scroll a terminal, so the bar steps through matching lines and Enter copies one:
 // - terminal: its screen and history from herdr-core (`hc read`); the bar shows the line;
 // - editor pane (mods/ide-editor): the open file; the editor lists every match below.
-// State: shared("ide-find") = { pane, query, at, matches? } while a bar is open; matches
+// State: shared("ide-find") = { [pane]: { query, at, matches? } } for each open bar; matches
 // ([{ n, parts: [before, hit, after] }]) only for editor panes, which draw the list.
 // Props from the app: { pane, terminal }.
 import { View, div, svg, image } from "gpui-kit";
@@ -11,6 +11,7 @@ import { h_flex, InputState, Input } from "gpui-base";
 import { panes, props, run, theme, home, hc, readTextFile, shared, setShared, nextCommand, notify } from "herdr";
 
 const FIND = "ide-find", HISTORY = 10000, SHOWN = 300, BEFORE = 40;
+const keyOf = t => `${t.on ?? ""}:${t.path}`;
 
 function icon(p, size, color) {
   if (!p?.icon) return null;
@@ -48,6 +49,8 @@ export default class Pane extends View {
     this.hovered = false;
     this.finding = false;
     this.lines = null;
+    this.source = null; // what this.lines came from: the terminal, or the editor file's key
+    this.gen = 0; // bumped by every load and close; a read that finishes later is dropped
     this.input = InputState.new({ placeholder: "Find" });
     this.input.on("change", (_e, cx) => { this.update({ query: this.input.value(), at: 0 }); cx.notify(); });
     this.input.on("submit", (_e, cx) => this.copy(cx));
@@ -68,13 +71,19 @@ export default class Pane extends View {
   // The open file of the editor group that owns this pane, if it is one.
   file() {
     const g = Object.values(shared("ide-editor.groups") ?? {}).find(x => x.open && x.pane === props()?.pane);
-    const tab = g?.tabs?.find(t => `${t.on ?? ""}:${t.path}` === g.active);
-    return tab ?? null;
+    return g?.tabs?.find(t => keyOf(t) === g.active) ?? null;
   }
 
   state() {
-    const s = shared(FIND);
-    return s?.pane === props()?.pane ? s : { query: "", at: 0 };
+    return shared(FIND)?.[props()?.pane] ?? { query: "", at: 0 };
+  }
+
+  // Writes this pane's search (null removes it), dropping entries of panes that are gone.
+  save(next) {
+    const live = new Set(panes().map(p => p.pane)), all = {};
+    for (const [pane, s] of Object.entries(shared(FIND) ?? {})) if (live.has(pane)) all[pane] = s;
+    if (next) all[props()?.pane] = next; else delete all[props()?.pane];
+    setShared(FIND, Object.keys(all).length ? all : null);
   }
 
   found() {
@@ -82,37 +91,48 @@ export default class Pane extends View {
   }
 
   update(change) {
-    const next = { ...this.state(), ...change, pane: props()?.pane };
+    const next = { ...this.state(), ...change };
     if (this.me()?.mod) next.matches = matches(this.lines ?? [], next.query).map(m => ({ n: m.n, parts: snippet(m) }));
-    setShared(FIND, next);
+    this.save(next);
   }
 
   open(cx) {
-    const p = this.me(), tab = p?.mod ? this.file() : null;
-    this.finding = true; this.lines = null; this.error = null;
+    this.finding = true;
     this.input.set_value(""); this.update({ query: "", at: 0 });
     this.input.focus();
+    this.load(cx);
+  }
+
+  // (Re)reads what the pane shows: the terminal's history, or the editor's open file.
+  load(cx) {
+    const p = this.me(), tab = p?.mod ? this.file() : null, gen = ++this.gen;
+    this.lines = null; this.error = null; this.source = tab ? keyOf(tab) : p?.terminal ?? null;
+    this.update({ at: 0 });
     if (!p?.terminal && !tab) { this.error = "Nothing to search here"; return; }
     cx.spawn(async cx => {
       try {
+        let lines;
         if (p.terminal) {
           const r = await hc(["read", p.terminal, "--lines", String(HISTORY)]);
           if (r.code !== 0) throw new Error(r.stderr.trim() || "hc read failed");
-          this.lines = r.stdout.split("\n");
+          lines = r.stdout.split("\n");
         } else {
           const text = await readTextFile(tab.path, { on: tab.on });
           if (text === null) throw new Error("This file is no longer available");
-          this.lines = text.split("\n");
+          lines = text.split("\n");
         }
+        if (gen !== this.gen) return;
+        this.lines = lines;
         this.update({});
-      } catch (e) { this.error = String(e.message ?? e); }
+      } catch (e) { if (gen === this.gen) this.error = String(e.message ?? e); }
       finally { cx.notify(); }
     });
   }
 
   close() {
-    this.finding = false; this.lines = null;
-    if (shared(FIND)?.pane === props()?.pane) setShared(FIND, null);
+    this.gen++;
+    this.finding = false; this.lines = null; this.source = null;
+    this.save(null);
     run("pane.focus", { pane: props()?.pane });
   }
 
@@ -193,6 +213,11 @@ export default class Pane extends View {
     const t = theme();
     const p = this.me();
     if (!p) return div();
+    if (this.finding && p.mod) {
+      // The editor switched files under an open bar: search the file it shows now.
+      const tab = this.file();
+      if ((tab ? keyOf(tab) : null) !== this.source) this.load(cx);
+    }
     if (this.finding) return this.findBar(t, p);
     const name = ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "shell";
     const pic = icon(p.program, 14, t.dim);

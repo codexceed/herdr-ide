@@ -102,9 +102,11 @@ Left to right, the same frame as Herdr's `main` layout:
   from `git symbolic-ref --short -q HEAD`, else `git rev-parse --short HEAD`.
 - `ide-chrome`: the shipped `workspace-chrome` with `fitBrand()` resizing `brand`.
 - `ide-pane`: the shipped `pane` header plus a find mode. `ide-pane.find` reaches every
-  header; the focused pane's opens. It keeps `shared("ide-find")` = `{pane, query, at,
-  matches?}`; for an editor pane `matches` carries each line cut around the hit, which
-  `ide-editor` draws as its list.
+  header; the focused pane's opens. It keeps `shared("ide-find")` = `{[pane]: {query, at,
+  matches?}}`, one entry per open bar; for an editor pane `matches` carries each line cut
+  around the hit, which `ide-editor` draws as its list. Each load or close bumps a
+  generation, so a read that finishes late is dropped; an editor bar reloads when the
+  editor's active file changes.
 - Programs: `mmdc` (`@mermaid-js/mermaid-cli`), `python3`, `sips` (macOS), `sh`.
   Icons: its own SVGs plus the shipped `workspace-chrome` icons used by `ide-agents`.
 
