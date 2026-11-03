@@ -33,7 +33,8 @@ Left to right, the same frame as Herdr's `main` layout:
     split button;
   - a 24px breadcrumb with the file's path (`~/…`);
   - the file as a read-only code view with line numbers and syntax colors, or rendered
-    markdown (24px side padding, 14px text) with diagrams as centered images.
+    markdown (24px side padding, 14px text in the system UI font) with diagrams as centered
+    images.
 - **Files panel** on the right (`ide-files`, hidden until the tab bar's Files button):
   the focused pane's folder as a lazy tree with git marks (A / M / D / U).
 - Status bar (shipped `workspace-status`).
@@ -99,9 +100,18 @@ Left to right, the same frame as Herdr's `main` layout:
 
 ## Watch out
 
-- A pane mod's `props()` holds only what it was opened with, not its pane id: the editor
-  learns its pane from `focused()` after a click or its creation, and names itself with
-  a `group` prop.
+- A pane mod's `props()` holds only what it was opened with, not its pane id, and
+  `pane.split` returns nothing to a mod (`panes()` catches up later). The editor names
+  itself with a `group` prop and learns its pane from `focused()` after a click, or as the
+  one editor pane in its tab that no other open group owns. It never takes an owned pane.
+- Geist, the default UI font, has no bold or italic faces: the markdown preview uses
+  `.SystemUIFont` so `**bold**` and `*italic*` show.
+- Herdr routes a mouse-up over another pane away from the preview, so a selectable
+  `TextView` can be left mid-drag and select on hover. Only the focused pane's preview is
+  selectable, and leaving the pane remounts its text. The selection itself is drawn in the
+  theme's `selection` color over the text; a mod can't restyle it.
+- A mod pane has no folder: while an editor pane has focus, Files keeps showing the
+  folder of the tab's last focused terminal.
 - `shared.json` edited on disk doesn't reach a running app: seed new editor panes
   through `props.seed`, not the file.
 - Core's terminal `cwd` can be where the shell started, not the agent's folder; match
