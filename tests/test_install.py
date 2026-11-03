@@ -78,6 +78,22 @@ class InstallTest(unittest.TestCase):
         run(self.home, "--replace-keys")
         self.assertEqual(self.keys()["mod:ide-editor"]["cmd-w"], "ide-editor.close")
 
+    def test_herdr_app_only_reaches_the_installed_homes_window(self):
+        calls = []
+        real = (install.herdr_app, install.subprocess.run)
+        install.herdr_app = lambda: "herdr-app"
+        install.subprocess.run = lambda args, **kw: calls.append((args, kw.get("env", {}).get("HERDR_APP_HOME"))) or \
+            type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                install.main(["--home", self.home, "--no-mermaid"])
+                install.main(["--home", self.home, "--uninstall"])
+        finally:
+            install.herdr_app, install.subprocess.run = real
+        app_calls = [c for c in calls if c[0][0] == "herdr-app"]
+        self.assertTrue(any("layout.switch" in args for args, _ in app_calls))
+        self.assertEqual({home for _, home in app_calls}, {self.home})
+
     def test_uninstall_removes_only_ours(self):
         with open(os.path.join(self.home, "keys.json"), "w") as f:
             json.dump({"global": {"cmd-t": "tab.new"}}, f)

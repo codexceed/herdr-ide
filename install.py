@@ -165,6 +165,12 @@ def herdr_app():
         (p for p in [os.path.expanduser("~/.local/bin/herdr-app"), "/Applications/Herdr.app/Contents/MacOS/herdr-app"] if os.path.exists(p)), None)
 
 
+def run_app(app, home, *args):
+    """Runs herdr-app against `home`'s window only: without HERDR_APP_HOME it would reach the
+    window of ~/.config/herdr-app, whatever --home says (tests install into a temp home)."""
+    return subprocess.run([app, *args], capture_output=True, text=True, env={**os.environ, "HERDR_APP_HOME": home})
+
+
 def check_and_switch(home, switch):
     app = herdr_app()
     if not app:
@@ -172,13 +178,13 @@ def check_and_switch(home, switch):
         return True
     ok = True
     for mod in mods():
-        r = subprocess.run([app, "check", os.path.join(home, "mods", mod)], capture_output=True, text=True)
+        r = run_app(app, home, "check", os.path.join(home, "mods", mod))
         if r.returncode != 0:
             ok = False
             say(f"check failed for {mod}:\n{(r.stdout + r.stderr).strip()}")
     say("all mods pass herdr-app check" if ok else "some mods failed their check; the layout may not work")
     if switch and ok:
-        r = subprocess.run([app, "do", "layout.switch", "--name", LAYOUT], capture_output=True, text=True)
+        r = run_app(app, home, "do", "layout.switch", "--name", LAYOUT)
         say("switched to the herdr-ide layout" if r.returncode == 0 else
             "Herdr isn't running: open it and press ctrl-shift-l (or Settings > Look) to pick herdr-ide")
     return ok
@@ -187,7 +193,7 @@ def check_and_switch(home, switch):
 def uninstall(home):
     app = herdr_app()
     if app:  # leave the layout first, so Herdr doesn't keep showing it
-        subprocess.run([app, "do", "layout.switch", "--name", "main"], capture_output=True)
+        run_app(app, home, "do", "layout.switch", "--name", "main")
     backup = Backup(home)
     for name in [f"layouts/{LAYOUT}.json", f"layouts/{LAYOUT}.png"] + [f"mods/{m}" for m in mods()]:
         backup.move(os.path.join(home, name))
