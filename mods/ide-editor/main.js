@@ -6,11 +6,12 @@
 // The Files panel (mods/ide-files) adds tabs to the most recently used group of the
 // current Herdr tab, or splits a new group to the right.
 // Commands (keys.json): ide-editor.markdown (cmd-shift-v), .split (cmd-\), .close (cmd-w).
+// Find (cmd-f) lives in the pane header (mods/ide-pane); this pane lists its matches.
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, TextView } from "gpui-base";
 import { props, shared, setShared, focused, panes, run, exec, readTextFile, theme, settings, appHome, home, nextCommand } from "herdr";
 
-const KEY = "ide-editor.groups", ACTIVE = "ide-editor.active", MOD = "ide-editor";
+const KEY = "ide-editor.groups", ACTIVE = "ide-editor.active", MOD = "ide-editor", FIND = "ide-find";
 const LANG = { ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js", toml: "yaml", jsonc: "json", svelte: "html", vue: "html" };
 const keyOf = t => `${t.on ?? ""}:${t.path}`;
 const nameOf = path => path.split(/[\\/]/).pop();
@@ -223,6 +224,22 @@ export default class EditorGroup extends View {
       .child(svg(`mods/${MOD}/${icon}.svg`).size(14));
   }
 
+  // The header's find matches for this pane: line number, then the line cut around the hit.
+  findList(t) {
+    const f = shared(FIND);
+    if (!this.pane || f?.pane !== this.pane || !f.matches?.length) return null;
+    return v_flex().id("eg-find").flex_none().max_h(220).overflow_y_scrollbar().py(4).border_b(1).border_color(t.border)
+      .bg(t.chrome).font_family(settings().font_family).text_size(12)
+      .children(f.matches.map((m, i) => h_flex().id(`eg-find-${i}`).h(22).flex_none().px(10).gap(10).items_center().cursor_pointer()
+        .bg(i === f.at ? t.selected : t.chrome).hover(s => s.bg(t.hover))
+        .on_click((_e, cx) => { setShared(FIND, { ...shared(FIND), at: i }); cx.notify(); })
+        .child(div().w(40).flex_none().text_right().text_color(t.dim).child(String(m.n)))
+        .child(h_flex().flex_1().min_w(0).overflow_hidden().whitespace_nowrap().text_color(t.muted)
+          .child(div().flex_none().child(m.parts[0]))
+          .child(div().flex_none().rounded(3).bg(t.accent).text_color(t.accent_foreground).child(m.parts[1]))
+          .child(div().flex_1().min_w(0).truncate().child(m.parts[2])))));
+  }
+
   tabStrip(g, t) {
     return h_flex().id("eg-strip").h(34).flex_none().bg(t.chrome).border_b(1).border_color(t.border).items_center()
       .child(h_flex().id("eg-tabs").flex_1().min_w(0).h_full().overflow_x_scroll().children(g.tabs.map((tab, i) => {
@@ -276,6 +293,7 @@ export default class EditorGroup extends View {
       .child(this.tabStrip(g, t))
       .when(Boolean(tab), el => el.child(h_flex().h(24).flex_none().px(12).items_center().text_size(11).text_color(t.dim)
         .child(div().flex_1().min_w(0).truncate().child(rel))))
+      .when(Boolean(this.findList(t)), el => el.child(this.findList(t)))
       .child(!tab
         ? v_flex().flex_1().items_center().justify_center().text_color(t.dim).child("No open files · pick one in Files")
         : preview

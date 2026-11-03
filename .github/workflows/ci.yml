@@ -21,4 +21,4 @@ jobs:
         with:
           node-version: '22'
       - run: python3 -m unittest discover -s tests
-      - run: node --test tests/editor.test.cjs tests/files.test.cjs
+      - run: node --test tests/editor.test.cjs tests/files.test.cjs tests/find.test.cjs

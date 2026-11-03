@@ -14,7 +14,7 @@ Needs Herdr, `python3` and (for diagrams) Node/npm. On a new machine:
 git clone https://github.com/codexceed/herdr-ide.git && python3 herdr-ide/install.py
 ```
 
-It copies the layout and its four mods into `~/.config/herdr-app`, merges three key
+It copies the layout and its five mods into `~/.config/herdr-app`, merges four key
 bindings into your `keys.json`, installs `@mermaid-js/mermaid-cli` if `mmdc` is missing,
 runs `herdr-app check` on each mod and switches the window to the layout.
 
@@ -53,6 +53,7 @@ No network access. The mods run local programs and read outside their folder:
 | Files side by side | ⌘\\ or the split button in an editor pane |
 | Close a file tab | × , middle-click, or ⌘W in the editor pane |
 | Markdown preview ⇄ source | ⌘⇧V or the `</>` button |
+| Find in a terminal or file | ⌘F: the pane's header turns into a find bar; ↑↓ steps through matching lines, Enter copies one, Esc closes. Editor panes also list every match |
 | Split terminals / agents | ⌘D (right), ⌘⇧D (down) |
 | Watch a swarm | Subagents appear under their agent while they run |
 

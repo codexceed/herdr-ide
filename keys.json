@@ -1,7 +1,8 @@
 {
   "layout:herdr-ide": {
     "cmd-shift-v": "ide-editor.markdown",
-    "cmd-\\": "ide-editor.split"
+    "cmd-\\": "ide-editor.split",
+    "cmd-f": "ide-pane.find"
   },
   "mod:ide-editor": {
     "cmd-w": "ide-editor.close"

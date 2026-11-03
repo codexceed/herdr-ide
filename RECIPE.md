@@ -27,7 +27,8 @@ Left to right, the same frame as Herdr's `main` layout:
     `input` color): the subagent's task, how long it has run (`2m`), and a spinner.
   - **Footer** (`ide-chrome` with `{footer: true}`): Settings, Add machine.
 - **Work area**: the shipped tab bar, then the active tab's panes as cards with the
-  shipped `pane` header. Panes can be terminals, agents or **editor panes** (`ide-editor`):
+  pane header (`ide-pane`: the shipped `pane` header plus find). Panes can be terminals,
+  agents or **editor panes** (`ide-editor`):
   - a 34px tab strip in `chrome` (active tab on `background` with a 1px `accent` top edge,
     a × on each tab), and on the right a preview/source toggle (markdown files only) and a
     split button;
@@ -62,6 +63,11 @@ Left to right, the same frame as Herdr's `main` layout:
 - **Keys:** ⌘⇧V and ⌘\\ work while this layout shows (`layout:herdr-ide`); ⌘W closes a
   file tab while an editor pane has the keyboard (elsewhere it still closes the Herdr
   tab). Splits are Herdr's own: ⌘D right, ⌘⇧D down.
+- **Find:** ⌘F (`layout:herdr-ide`) turns the focused pane's header into a find bar over
+  that pane: query, `3 of 120`, ↑↓ (or the chevrons) to step, Enter copies the line,
+  Esc or × closes. Terminals search their screen plus 10,000 lines of history (`hc read`)
+  and show the current match's line in the bar; editor panes search the open file and
+  list every match under the breadcrumb. Matches are lines, newest first, any case.
 
 ## Built from
 
@@ -95,6 +101,10 @@ Left to right, the same frame as Herdr's `main` layout:
   folder (its first terminal's live `cwd`), as the shipped `spaces` mod does; the branch
   from `git symbolic-ref --short -q HEAD`, else `git rev-parse --short HEAD`.
 - `ide-chrome`: the shipped `workspace-chrome` with `fitBrand()` resizing `brand`.
+- `ide-pane`: the shipped `pane` header plus a find mode. `ide-pane.find` reaches every
+  header; the focused pane's opens. It keeps `shared("ide-find")` = `{pane, query, at,
+  matches?}`; for an editor pane `matches` carries each line cut around the hit, which
+  `ide-editor` draws as its list.
 - Programs: `mmdc` (`@mermaid-js/mermaid-cli`), `python3`, `sips` (macOS), `sh`.
   Icons: its own SVGs plus the shipped `workspace-chrome` icons used by `ide-agents`.
 
@@ -127,6 +137,10 @@ Left to right, the same frame as Herdr's `main` layout:
 - `flex_shrink(value)` needs a number (`flex_shrink_1()` doesn't); `herdr-app check` won't
   catch it in rows that only draw once the git answer arrives — look at the window.
 - Editor panes are read-only; tabs can't be dragged between panes.
+- Find can't jump: Herdr has no API to scroll a terminal or the code view, or to place a
+  popup over a pane, hence a bar in the pane's header and Enter copying the line.
+- Never cut a JS string inside a surrogate pair: half an emoji is invalid UTF-8 and the
+  frame fails to draw ("Conversion from string failed").
 
 ## Done when
 
