@@ -133,8 +133,9 @@ Left to right, the same frame as Herdr's `main` layout:
   after `-_. `, +7 for camelCase, +6 in the file name, +4 per letter in a run, −3 to open
   a gap and −1 per skipped letter), minus a little per character of the name and path;
   printed files get +12 and recent ones +6. Herdr stops a render after 50 ms and a task
-  resumption after 500 ms, and a path costs ~30 µs, so ranking runs in a task, 1,000 paths
-  per resumption with `cx.sleep(0)` between; render only reads finished rows, a newer query
+  resumption after 500 ms, and a path costs ~30 µs (~0.6 ms for a 125-character path and a
+  six-word query), so ranking runs in a task, in batches that end after 20 ms
+  (`BATCH_MS`) with `cx.sleep(0)` between; an alignment over 32,768 cells uses a greedy match; render only reads finished rows, a newer query
   abandons the old one, a longer one re-ranks only the last one's matches, and Enter during
   a search opens its best file once it ends. It opens files
   with a copy of `ide-files`' `openFile()` (plus `pane` for the split and `pane.focus` for an

@@ -1,5 +1,5 @@
 const { test } = require('node:test');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const os = require('node:os');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -8,8 +8,8 @@ const path = require('node:path');
 
 const source = fs.readFileSync(path.join(__dirname, '../mods/ide-open/main.js'), 'utf8')
   .replace(/^import [^;]*;\n/gm, '').replace('export default class Open', 'class Open');
-const pure = vm.runInNewContext(source + '\n({ normalize, display, pathsIn, resolve, score, rank, rankInto, termsOf, SLICE });', { View: class {} });
-const { normalize, display, pathsIn, resolve, score, rank, rankInto, termsOf, SLICE } = pure;
+const pure = vm.runInNewContext(source + '\n({ normalize, display, pathsIn, resolve, score, rank, rankInto, termsOf, MAX_CELLS });', { View: class {} });
+const { normalize, display, pathsIn, resolve, score, rank, rankInto, termsOf, MAX_CELLS } = pure;
 const json = v => JSON.stringify(v);
 
 test('paths normalize and show relative to the root, else under ~', () => {
@@ -41,10 +41,12 @@ test('printed paths keep spaces when quoted, brackets, any script and escaped sp
     'Wrote `/tmp/project/path with space/notes.md` and "/tmp/q dir/a.md"',
     'it\'s in `src/x.js` and don\'t forget /tmp/project/src/app/[id]/page.tsx.',
     'see /tmp/project/docs/研究.md, then /tmp/esc\\ aped/f.md and [README.md](README.md)',
+    'opened `/tmp/John\'s Project/notes.md` and "/tmp/Ann\'s/b.md"',
   ].join('\n');
   const found = pathsIn(text);
   for (const p of ['/tmp/project/path with space/notes.md', '/tmp/q dir/a.md', 'src/x.js',
-    '/tmp/project/src/app/[id]/page.tsx', '/tmp/project/docs/研究.md', '/tmp/esc aped/f.md', 'README.md']) {
+    '/tmp/project/src/app/[id]/page.tsx', '/tmp/project/docs/研究.md', '/tmp/esc aped/f.md', 'README.md',
+    "/tmp/John's Project/notes.md", "/tmp/Ann's/b.md"]) {
     assert.ok(found.includes(p), `${p} in ${json(found)}`);
   }
   // The quoted path ranks where it ends, ahead of the words inside it.
@@ -52,12 +54,23 @@ test('printed paths keep spaces when quoted, brackets, any script and escaped sp
   assert.equal(resolve('"/tmp/a b.md:3"'.slice(1, -1), '/r', '/h'), '/tmp/a b.md');
 });
 
-test('ranking in slices gives the same top rows as ranking at once', () => {
+test('ranking in timed batches gives the same top rows as ranking at once', () => {
   const items = Array.from({ length: 2500 }, (_, i) => ({ path: `packages/c${i % 97}/src/main${i}.test.js` }));
   const top = [], matched = [];
-  for (let i = 0; i < items.length; i += 700) rankInto(termsOf('main test'), items, i, i + 700, top, matched);
+  let batches = 0;
+  // A deadline already past: each batch still ranks one item, then stops.
+  for (let i = 0; i < items.length; batches++) i = rankInto(termsOf('main test'), items, i, top, matched, Date.now() - 1);
+  assert.equal(batches, 2500);
   assert.equal(json(top.map(r => r.path)), json(rank('main test', items).map(r => r.path)));
   assert.equal(matched.length, 2500);
+});
+
+test('a huge alignment falls back to a greedy match instead of a giant table', () => {
+  const long = 'deep/'.repeat(Math.ceil(MAX_CELLS / 4 / 5)) + 'main.test.js';
+  const s = score('main', long);
+  assert.ok(s);
+  assert.equal(s.hits.length, 4);
+  assert.equal(score('zzzz', long), null);
 });
 
 test('fuzzy: a subsequence matches, anything else does not', () => {
@@ -81,7 +94,7 @@ test('fuzzy: hits point at the matched characters in the file name', () => {
 });
 
 // The popup with stubbed Herdr.
-function popup({ git = true, printed = '', printed2 = '', exists = [], recent = [], focus = 'term', files = 'README.md\0mods/ide-open/main.js\0sub/notes.md\0' } = {}) {
+function popup({ tick = 0, git = true, printed = '', printed2 = '', exists = [], recent = [], focus = 'term', files = 'README.md\0mods/ide-open/main.js\0sub/notes.md\0' } = {}) {
   const state = { shared: { 'ide-open.recent': recent }, calls: [], closed: 0, execs: [], yields: 0 };
   const element = new Proxy({}, { get: () => () => element });
   const sandbox = {
@@ -107,6 +120,8 @@ function popup({ git = true, printed = '', printed2 = '', exists = [], recent = 
       return { code: 0, stdout: 'a.txt\nb/c.md\n', stderr: '' };
     },
   };
+  // tick > 0: a fake clock that moves `tick` ms per read, so batches end after a few paths.
+  if (tick) { let now = 0; sandbox.Date = { now: () => (now += tick) }; }
   const Open = vm.runInNewContext(source + '\nOpen;', sandbox);
   const pending = [];
   const cx = { spawn: fn => { pending.push(fn(cx)); }, notify() {}, sleep: async () => { state.yields++; }, timer: { after() {} } };
@@ -209,12 +224,13 @@ test('a printed path with spaces, brackets or other scripts survives the existen
 
 const many = n => Array.from({ length: n }, (_, i) => `packages/c${i % 97}/src/main${i}.test.js\0`).join('');
 
-test('a query ranks in slices off the render path, yielding between them', async () => {
-  const { o, state, settle, type } = popup({ files: many(3 * SLICE + 5) });
+test('a query ranks in timed batches off the render path, yielding between them', async () => {
+  const { o, state, settle, type } = popup({ tick: 5, files: many(300) });
   await settle();
   const before = state.yields;
   await type('test');
-  assert.ok(state.yields - before >= 3, `yields: ${state.yields - before}`);
+  // 5 ms a clock read, 20 ms a batch: a few paths per batch, so dozens of yields.
+  assert.ok(state.yields - before >= 50, `yields: ${state.yields - before}`);
   assert.equal(o.found.done, true);
   assert.equal(o.rows().length, 60);
   // render reads the finished rows; it ranks nothing itself.
@@ -223,7 +239,7 @@ test('a query ranks in slices off the render path, yielding between them', async
 });
 
 test('a newer query abandons an older one, and a longer query narrows the last matches', async () => {
-  const { o, settle, type } = popup({ files: many(3 * SLICE) + 'docs/other.md\0' });
+  const { o, settle, type } = popup({ tick: 5, files: many(300) + 'docs/other.md\0' });
   await settle();
   o.input.v = 'main';
   o.input.fire('change', { spawn: () => {}, notify() {} }); // its search never runs to the end
@@ -253,8 +269,12 @@ test('Enter while a query is still ranking opens its best file once ranked', asy
   assert.equal(state.calls.find(c => c.command === 'pane.split').args.props.seed.tabs[0].path, '/r/mods/ide-open/main.js');
 });
 
-// Herdr's own engine: one slice fits even a render's 50 ms (tasks get 500 ms), and a render with
-// 50,000 files and a query ranks nothing. Skipped where Herdr isn't installed (CI).
+// Herdr's own engine, on the reviewer's worst case: long paths and a seven-word query.
+// - render: one timed batch fits even a render's 50 ms (tasks get 500 ms), and the popup with
+//   50,000 files and a query renders without ranking;
+// - init: the real search() runs its first batch (check exits before later ones) and must not
+//   be interrupted; check reports that only as a warning, so the output is checked too.
+// Skipped where Herdr isn't installed (CI).
 const herdrApp = (() => { try { return execFileSync('sh', ['-c', 'command -v herdr-app'], { encoding: 'utf8' }).trim(); } catch { return null; } })();
 test('native: ranking stays inside Herdr\'s execution limits', { skip: herdrApp ? false : 'herdr-app not installed' }, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ide-open-native-'));
@@ -264,24 +284,33 @@ test('native: ranking stays inside Herdr\'s execution limits', { skip: herdrApp 
     fs.writeFileSync(path.join(mod, 'mod.json'), '{ "place": "none", "title": "probe" }');
     const main = fs.readFileSync(path.join(__dirname, '../mods/ide-open/main.js'), 'utf8').replace('export default class Open', 'class Open');
     fs.writeFileSync(path.join(mod, 'main.js'), main + `
+const QUERY = "components quick open search main test";
+const LONG = i => \`packages/curriculum-engineering/tasks/repository-workflows/frontend/components/quick-open/file-search/component-\${i}/src/main.test.js\`;
 export default class Probe extends View {
-  init() {
-    this.items = [];
-    for (let i = 0; i < SLICE; i++) this.items.push({ path: \`packages/component-\${i % 97}/src/main\${i}.test.js\` });
-    const o = this.open = Object.create(Open.prototype);
-    Object.assign(o, { root: "/r", printed: [], ctx: { on: null, cwd: "/r" }, query: "test", found: null, notice: null, error: null, at: 0, top: 0 });
-    o.files = this.items.map(x => x.path);
-    for (let i = o.files.length; i < 50000; i++) o.files.push(\`packages/component-\${i % 97}/src/f\${i}.test.ts\`);
-    o.input = InputState.new({});
+  init(_props, cx) {
+    this.items = Array.from({ length: 5000 }, (_, i) => ({ path: LONG(i) }));
+    const open = cx => {
+      const o = Object.create(Open.prototype);
+      Object.assign(o, { root: "/r", printed: [], ctx: { on: null, cwd: "/r" }, query: QUERY, gen: 0, found: null, last: null, enter: false, notice: null, error: null, at: 0, top: 0 });
+      o.recent = () => [];
+      o.files = Array.from({ length: 50000 }, (_, i) => LONG(i));
+      return o;
+    };
+    this.open = open();
+    this.open.input = InputState.new({});
+    open().search(cx);
   }
   render() {
-    rankInto(termsOf("test"), this.items, 0, SLICE, [], []);
+    rankInto(termsOf(QUERY), this.items, 0, [], [], Date.now() + BATCH_MS);
     return this.open.render();
   }
 }
 `);
-    const out = execFileSync(herdrApp, ['check', mod], { encoding: 'utf8', env: { ...process.env, HERDR_APP_HOME: path.join(dir, 'home') }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const r = spawnSync(herdrApp, ['check', mod], { encoding: 'utf8', env: { ...process.env, HERDR_APP_HOME: path.join(dir, 'home') } });
+    const out = r.stdout + r.stderr;
+    assert.equal(r.status, 0, out);
     assert.match(out, /check passed/);
+    assert.doesNotMatch(out, /interrupted|error/i, out);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

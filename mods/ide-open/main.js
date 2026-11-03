@@ -11,8 +11,12 @@ import { spaces, panes, focused, exec, hc, home, theme, shared, setShared, run, 
 
 const GROUPS = "ide-editor.groups", ACTIVE = "ide-editor.active", RECENT = "ide-open.recent";
 const MAX_FILES = 50000, SHOWN = 60, ROWS = 12, ROW = 30, HISTORY = 2000, CANDIDATES = 300;
-// Paths ranked per task resumption: 1,000 take ~30 ms in Herdr, against a 500 ms limit.
-const SLICE = 1000;
+// Milliseconds of ranking per task resumption. A path costs ~30 µs in Herdr, or much more for
+// long paths and many-word queries, so batches end on time, not on a count: well under a
+// task's 500 ms limit, and under a render's 50 ms too.
+const BATCH_MS = 20;
+// Above this many cells (query letters × path length) one alignment is a greedy match instead.
+const MAX_CELLS = 32768;
 
 // ---- paths
 
@@ -39,7 +43,8 @@ const display = (abs, root, h) =>
 const WORD = String.raw`(?:[\p{L}\p{N}\p{M}_@+.%\[\]-]|\\ )+`;
 const PATHISH = new RegExp(String.raw`(?:file://)?(?:~/|\.\.?/|/)?${WORD}(?:/${WORD})*`, "gu");
 // One pattern per quote pair, so an apostrophe in prose can't swallow a backticked path.
-const QUOTED = ["``", '""', "''", "“”", "‘’"].map(([open, close]) => new RegExp(`${open}([^\`"'“”‘’\\n]{1,1024})${close}`, "gu"));
+// Each excludes only its own closer, so `John's Project/notes.md` stays whole.
+const QUOTED = ["``", '""', "''", "“”", "‘’"].map(([open, close]) => new RegExp(`${open}([^${close}\\n]{1,1024})${close}`, "gu"));
 const EXT = /\.[\p{L}\p{N}]{1,10}(?::\d+){0,2}$/u;
 // One raw match -> the candidates to try: itself, then without wrapping brackets.
 function candidates(raw) {
@@ -92,17 +97,19 @@ function bonus(text, i, base) {
 
 // Best alignment of one term in `text` (`t` is it lowercased): { score, hits } or null when it
 // isn't a subsequence. The score table is one flat buffer reused across calls; a path costs
-// ~45 µs in Herdr's QuickJS, so allocation matters.
+// ~30 µs in Herdr's QuickJS, so allocation matters.
 const NEG = -1e9;
 let table = new Float64Array(1024), back = new Int32Array(1024);
 function align(term, text, t = text.toLowerCase()) {
   const n = t.length, m = term.length;
-  // Fast reject.
+  // Fast reject; `first` is the leftmost greedy match.
+  const first = [];
   for (let i = 0, j = 0; ; i++) {
     if (j === m) break;
     if (i === n) return null;
-    if (t[i] === term[j]) j++;
+    if (t[i] === term[j]) { first.push(i); j++; }
   }
+  if (m * n > MAX_CELLS) return greedy(text, first);
   if (table.length < m * n) { table = new Float64Array(m * n * 2); back = new Int32Array(m * n * 2); }
   const M = table;
   M.fill(NEG, 0, m * n);
@@ -130,6 +137,17 @@ function align(term, text, t = text.toLowerCase()) {
   return { score, hits: hits.reverse() };
 }
 
+// A huge alignment's stand-in: the leftmost match, scored like align() without the search.
+function greedy(text, hits) {
+  const base = text.lastIndexOf("/") + 1;
+  let score = 0;
+  hits.forEach((i, k) => {
+    score += 16 + bonus(text, i, base);
+    if (k) score += i === hits[k - 1] + 1 ? 4 : -3 - (i - hits[k - 1] - 2);
+  });
+  return { score, hits };
+}
+
 const termsOf = query => query.toLowerCase().split(/\s+/).filter(Boolean);
 
 // Space-separated terms must all match (any order), like VS Code. Shorter file names, then
@@ -149,12 +167,14 @@ const score = (query, text) => scoreTerms(termsOf(query), text, text.toLowerCase
 
 const better = (a, b) => b.score - a.score || a.path.length - b.path.length;
 
-// Scores items[from, to) ({ path, boost? }) into `top` (best first, at most `limit`) and
-// collects every match into `matched`. One slice at a time keeps each host call short.
-function rankInto(terms, items, from, to, top, matched = null, limit = SHOWN) {
+// Scores items from `from` ({ path, boost? }) into `top` (best first, at most `limit`) and
+// collects every match into `matched`, until the list ends or the clock passes `until`
+// (at least one item either way). Returns where it stopped, for the next batch.
+function rankInto(terms, items, from, top, matched = null, until = Infinity, limit = SHOWN) {
   const floor = top.length >= limit ? top[top.length - 1].score : -Infinity;
-  let added = false;
-  for (let i = from; i < Math.min(to, items.length); i++) {
+  let added = false, i = from;
+  for (; i < items.length; i++) {
+    if (i > from && Date.now() > until) break;
     const item = items[i];
     const s = scoreTerms(terms, item.path, item.lower ??= item.path.toLowerCase());
     if (!s) continue;
@@ -165,11 +185,15 @@ function rankInto(terms, items, from, to, top, matched = null, limit = SHOWN) {
     added = true;
   }
   if (added) { top.sort(better); top.length = Math.min(top.length, limit); }
-  return top;
+  return i;
 }
 
 // Items that match, best first; ties go to the shorter path.
-const rank = (query, items, limit = SHOWN) => rankInto(termsOf(query), items, 0, items.length, [], null, limit);
+function rank(query, items, limit = SHOWN) {
+  const top = [];
+  rankInto(termsOf(query), items, 0, top, null, Infinity, limit);
+  return top;
+}
 
 // ---- opening (the same as a Files click: mods/ide-files openFile)
 
@@ -299,8 +323,8 @@ export default class Open extends View {
   }
 
   // Ranks the query off the render path. Herdr stops a render after 50 ms and each task
-  // resumption after 500 ms, and 50,000 paths take seconds, so the work goes in slices with
-  // a yield between them. Results show as they improve; a newer query abandons the old one.
+  // resumption after 500 ms, and 50,000 paths take seconds, so the work goes in batches of
+  // BATCH_MS with a yield between them. Results show as they improve; a newer query abandons the old one.
   // A query that extends the last finished one only re-ranks that one's matches.
   search(cx) {
     const gen = ++this.gen, q = this.query.trim();
@@ -311,9 +335,9 @@ export default class Open extends View {
       const items = narrow ? this.last.matched : pool.all;
       const top = [], matched = [];
       let shown = 0;
-      for (let i = 0; i < items.length; i += SLICE) {
+      for (let i = 0; i < items.length;) {
         if (i) { await cx.sleep(0); if (gen !== this.gen) return; }
-        rankInto(terms, items, i, i + SLICE, top, matched);
+        i = rankInto(terms, items, i, top, matched, Date.now() + BATCH_MS);
         if (Date.now() - shown > 80) { this.found = { q, key: pool.key, rows: top.slice(), done: false }; shown = Date.now(); cx.notify(); }
       }
       if (gen !== this.gen) return;
