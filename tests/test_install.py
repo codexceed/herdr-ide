@@ -94,6 +94,20 @@ class InstallTest(unittest.TestCase):
         self.assertTrue(any("layout.switch" in args for args, _ in app_calls))
         self.assertEqual({home for _, home in app_calls}, {self.home})
 
+    def test_without_a_running_herdr_it_opens_on_the_layout_at_start(self):
+        with open(os.path.join(self.home, "shared.json"), "w") as f:
+            json.dump({"layout": "main", "other": 1}, f)
+        real = install.herdr_app
+        install.herdr_app = lambda: None
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                install.main(["--home", self.home, "--no-mermaid"])
+        finally:
+            install.herdr_app = real
+        with open(os.path.join(self.home, "shared.json")) as f:
+            self.assertEqual(json.load(f), {"layout": "herdr-ide", "other": 1})
+        self.assertIn("next time it starts", out.getvalue())
+
     def test_uninstall_removes_only_ours(self):
         with open(os.path.join(self.home, "keys.json"), "w") as f:
             json.dump({"global": {"cmd-t": "tab.new"}}, f)
