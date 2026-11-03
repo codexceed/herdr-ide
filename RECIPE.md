@@ -38,6 +38,10 @@ Left to right, the same frame as Herdr's `main` layout:
     images.
 - **Files panel** on the right (`ide-files`, hidden until the tab bar's Files button):
   the focused pane's folder as a lazy tree with git marks (A / M / D / U).
+- **Go to file** (`ide-open`, ⌘P): a 640px popup hanging 40px from the top, like VS Code's
+  Quick Open: a search field, up to 12 rows (file icon, name, then its folder dimmed;
+  matched letters in `accent`, a `terminal` / `recent` tag on the right) and a status line
+  (`99 files in ~/Repos/x`).
 - Status bar (shipped `workspace-status`).
 
 ## How it behaves
@@ -69,6 +73,18 @@ Left to right, the same frame as Herdr's `main` layout:
   Esc or × closes. Terminals search their screen plus 10,000 lines of history (`hc read`)
   and show the current match's line in the bar; editor panes search the open file and
   list every match under the breadcrumb. Matches are lines, newest first, any case.
+- **Go to file:** ⌘P (`layout:herdr-ide`; Herdr's own ⌘P tab picker moves to ⌥⌘P) searches
+  the git repo holding the focused terminal's folder (tracked and untracked files, not
+  ignored ones), else that folder (`rg --files` or `find`, at most 50,000 files), else the
+  space's. An editor pane has no folder, so it uses the tab's terminal. Matching is fuzzy,
+  as in VS Code: letters in order, word starts, the file name and runs of letters score
+  higher; space-separated words must all match. With no query it lists the files the
+  tab's terminals printed (last 2,000 lines, newest first, only ones that exist, any
+  folder), then files opened with ⌘P before. A query starting with `/` or `~` is a path:
+  Enter opens it wherever it is, or says it's a folder or missing. Enter opens a file
+  like a Files click; an editor pane that already exists gets the focus. Herdr gives mods
+  no Cmd-click on terminal links ([herdr-app#228](https://github.com/herdrdev/herdr-app/issues/228)),
+  so ⌘P, Enter stands in for clicking a path an agent printed.
 
 ## Built from
 
@@ -110,6 +126,14 @@ Left to right, the same frame as Herdr's `main` layout:
   around the hit, which `ide-editor` draws as its list. Each load or close bumps a
   generation, so a read that finishes late is dropped; an editor bar reloads when the
   editor's active file changes.
+- `ide-open` (`place: none`; `mod.json` overlay = popup at the top, 640×470): opened by
+  `mod.open:ide-open`, so it reads where ⌘P was pressed from `focused()` / `panes()` when
+  it opens. Ranking is an fzf-style alignment per path (16 per letter, +10 after `/`, +8
+  after `-_. `, +7 for camelCase, +6 in the file name, +4 per letter in a run, −3 to open
+  a gap and −1 per skipped letter), minus a little per character of the name and path;
+  printed files get +12 and recent ones +6. Rankings are memoized per query. It opens files
+  with a copy of `ide-files`' `openFile()` (plus `pane` for the split and `pane.focus` for an
+  existing group) and keeps the last 30 in `shared("ide-open.recent")`.
 - Programs: `mmdc` (`@mermaid-js/mermaid-cli`), `python3`, `sips` (macOS), `sh`.
   Icons: its own SVGs plus the shipped `workspace-chrome` icons used by `ide-agents`.
 

@@ -43,6 +43,8 @@ No network access. The mods run local programs and read outside their folder:
 - `ide-editor` reads the files you open and runs `mmdc` + `sips` to render diagrams into
   `~/.config/herdr-app/data/ide-mermaid/`.
 - `ide-files` runs `sh` to list folders and `git status` for change marks.
+- `ide-open` runs `git ls-files` (outside a repo `rg --files` or `find`), `hc read` on the
+  tab's terminals, and `sh` to check which printed paths exist.
 - `ide-agents` runs `python3 swarm.py`, which reads `~/.claude/projects/` and opens
   `~/.codex/*.sqlite` read-only.
 
@@ -51,6 +53,7 @@ No network access. The mods run local programs and read outside their folder:
 | Do | How |
 | --- | --- |
 | Open a file as a tab | Click it in **Files** (tab bar → Files) |
+| Go to a file | ⌘P: fuzzy-find in the terminal's git repo; with no query it lists files the tab's terminals printed (⌘P, Enter opens what an agent just mentioned); `/…` or `~/…` opens any path. Herdr's tab picker moves to ⌥⌘P |
 | Files side by side | ⌘\\ or the split button in an editor pane |
 | Close a file tab | × , middle-click, or ⌘W in the editor pane |
 | Markdown preview ⇄ source | ⌘⇧V or the `</>` button |

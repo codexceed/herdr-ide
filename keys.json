@@ -2,7 +2,9 @@
   "layout:herdr-ide": {
     "cmd-shift-v": "ide-editor.markdown",
     "cmd-\\": "ide-editor.split",
-    "cmd-f": "ide-pane.find"
+    "cmd-f": "ide-pane.find",
+    "cmd-p": "mod.open:ide-open",
+    "cmd-alt-p": "mod.open:picker"
   },
   "mod:ide-editor": {
     "cmd-w": "ide-editor.close"
