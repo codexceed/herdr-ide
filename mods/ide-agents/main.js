@@ -50,7 +50,7 @@ function title(tab, l) {
 const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
 // A sub-agent without a pane isn't in agents(): its raw word, error counting as
 // blocked. It's never done: it reports to its parent, and the parent's done is the news.
-const SWARM = { working: "working", error: "blocked", stopped: "idle", done: "idle" };
+const SWARM = { working: "working", waiting: "idle", error: "blocked", stopped: "idle", done: "idle" };
 const kidStatus = (k, listed) => {
   if (k.swarm) return SWARM[k.status] ?? "idle";
   const s = listed.get(k.address) ?? k.status;

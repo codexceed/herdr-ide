@@ -3,16 +3,20 @@
 
 argv[1]: JSON list of {"address", "kind": "claude"|"codex", "cwd"}.
 stdout:  JSON {address: [{id, name, detail, status, started, ended, depth}]}
-         Only running subagents are listed: finished ones disappear.
+         Only running or waiting subagents are listed: finished ones disappear.
 
 Claude: the terminal's session comes from data/swarm/claude-<terminal>.json, written by
 claude_hook.py (SessionStart); else the newest transcript in the cwd's project folder.
-Each subagent has <session>/subagents/agent-<id>.meta.json + .jsonl.
+Each subagent has <session>/subagents/agent-<id>.meta.json + .jsonl. It runs while its log
+ends mid tool call (a long command writes nothing until it returns) or was written in the last
+STALE seconds; it waits while its parent's latest notification about it says it is waiting on
+its own background work. `finished` in the meta is set at every turn end, even before a revive.
 Codex: the newest top-level thread in the cwd (state_5.sqlite); children from
 thread_spawn_edges, status from the last turn in thread_history_1.sqlite.
 """
 import glob
 import json
+import mmap
 import os
 import re
 import sqlite3
@@ -21,7 +25,9 @@ import time
 
 HOME = os.path.expanduser("~")
 APP = os.path.join(HOME, ".config", "herdr-app")
-STALE = 120  # an unfinished Claude subagent silent this long (s) counts as stopped
+STALE = 120  # a Claude subagent silent this long (s), outside a tool call, counts as stopped
+ORPHAN = 6 * 3600  # running a tool or waiting this long without a word counts as stopped
+WAITING = b"is waiting on its own background work"
 now = time.time()
 
 
@@ -41,6 +47,35 @@ def claude_session(address, cwds):
     return max(sessions, key=os.path.getmtime) if sessions else None
 
 
+def last_turn(log):
+    """How a subagent log ends: "tool" (mid tool call), "end" (turn over), "busy" or None."""
+    with open(log, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        f.seek(max(0, f.tell() - 65536))
+        lines = f.read().splitlines()
+    for line in reversed(lines):
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if r.get("type") == "assistant":
+            return "end" if (r.get("message") or {}).get("stop_reason") == "end_turn" else "tool"
+        if r.get("type") == "user":
+            return "busy"
+    return None
+
+
+def waiting(transcript, agent):
+    """True when the parent's latest notification about `agent` says it waits on background work."""
+    try:
+        with open(transcript, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
+            at = m.rfind(f"<task-id>{agent}</task-id>".encode())
+            end = m.find(b"</summary>", at) if at >= 0 else -1
+            return end > 0 and m.find(WAITING, at, end) >= 0
+    except (OSError, ValueError):
+        return False
+
+
 def claude_children(address, cwds):
     transcript = claude_session(address, cwds)
     if not transcript:
@@ -54,20 +89,26 @@ def claude_children(address, cwds):
             st = os.stat(log)
         except (OSError, ValueError):
             continue
-        started = getattr(st, "st_birthtime", st.st_ctime)
-        if meta.get("finished"):
-            status, ended = "done", st.st_mtime
-        elif now - st.st_mtime > STALE:
-            status, ended = "stopped", st.st_mtime
-        else:
-            status, ended = "working", None
-        if status != "working":
+        started, age, agent = getattr(st, "st_birthtime", st.st_ctime), now - st.st_mtime, os.path.basename(log)[6:-6]
+        if meta.get("finished") and age > ORPHAN:
             continue
+        try:
+            turn = last_turn(log)
+        except OSError:
+            continue
+        if turn == "end" and age < ORPHAN and waiting(transcript, agent):
+            status = "waiting"
+        elif turn == "end" and meta.get("finished"):
+            continue  # done
+        elif (turn == "tool" and age < ORPHAN) or age < STALE:
+            status = "working"
+        else:
+            continue  # stopped
         out.append({
-            "id": os.path.basename(log)[6:-6],
+            "id": agent,
             "name": meta.get("description") or meta.get("agentType") or "subagent",
             "detail": meta.get("agentType", ""),
-            "status": status, "started": started, "ended": ended,
+            "status": status, "started": started, "ended": None,
             "depth": max(0, int(meta.get("spawnDepth") or 1) - 1),
         })
     return sorted(out, key=lambda c: c["started"])

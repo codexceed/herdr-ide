@@ -44,7 +44,8 @@ Left to right, the same frame as Herdr's `main` layout:
 
 - **Agents:** an agent's own status works as in Herdr (working spinner, `Needs you`,
   done dot, idle ring). Subagent rows appear while the subagent runs and **disappear when
-  it finishes**; a failed one shows `Needs you` until it's gone. A running subagent
+  it finishes**; one waiting on its own background work shows the idle ring; a failed one
+  shows `Needs you` until it's gone. A running subagent
   counts toward its parent's place in the Working section. Clicking a subagent row
   focuses its parent's pane; hovering shows the full task. The parent's chevron folds the
   tree. The tree refreshes every 3 s.
@@ -93,7 +94,9 @@ Left to right, the same frame as Herdr's `main` layout:
     by the optional `claude_hook.py` SessionStart hook), else the newest transcript in
     `~/.claude/projects/<folder>/`; subagents from
     `<session>/subagents/agent-*.meta.json` (`description`, `agentType`, `finished`) and
-    the `.jsonl`'s times.
+    the `.jsonl`: running while it ends mid tool call or was written in the last 2 min;
+    waiting while the parent transcript's latest `<task-notification>` about it says
+    "is waiting on its own background work".
   - Codex: the newest top-level thread for the folder in `~/.codex/state_5.sqlite`,
     children from `thread_spawn_edges` (nickname, `agent_path`), status from the last row
     of `thread_turns` in `thread_history_1.sqlite`; both opened read-only.
@@ -131,8 +134,11 @@ Left to right, the same frame as Herdr's `main` layout:
 - `mmdc` needs a browser: npm may block puppeteer's postinstall, so install
   `chrome-headless-shell` with `npx puppeteer browsers install` from mermaid-cli's
   folder. Render to PNG: SVG labels use `foreignObject`, which the image loader drops.
-- Claude subagents silent for 2 minutes count as stopped; Codex threads open for 6 hours
-  without a finished turn count as orphaned.
+- A Claude subagent's `finished` is set at every turn end and stays set after a revive,
+  and a long tool call writes nothing until it returns: neither silence nor `finished`
+  alone says it stopped. Silent 2 minutes outside a tool call counts as stopped; running a
+  tool or waiting for 6 hours, like a Codex thread open that long without a finished turn,
+  counts as orphaned.
 - Diagram sizing uses `sips`, so mermaid previews are macOS-only as built.
 - Without the Claude hook, two Claude terminals in the same folder show the same
   session's subagents.
