@@ -24,9 +24,15 @@ function openFile(path, on) {
   if (fresh) run("pane.split", { direction: "right", mod: "ide-editor", props: { group: gid, seed: { tabs: [{ path, on: on ?? null }], active: k } } });
 }
 
+// A mod pane (an editor) has no folder: show the tab's last focused terminal's instead.
+const lastTerminal = new Map(); // tab -> pane
 function location() {
   const space = spaces().find(s => s.active), f = focused();
-  const pane = f?.pane ? panes().find(p => p.pane === f.pane) : null;
+  let pane = f?.pane ? panes().find(p => p.pane === f.pane) : null;
+  if (pane?.mod) {
+    const terminals = panes().filter(p => p.tab === pane.tab && p.terminal && p.cwd);
+    pane = terminals.find(p => p.pane === lastTerminal.get(pane.tab)) ?? terminals[0] ?? null;
+  } else if (pane) lastTerminal.set(pane.tab, pane.pane);
   const on = f?.pane === null ? (f.terminal?.includes("/") ? f.terminal.split("/")[0] : null) : space?.machine ?? null;
   return { cwd: pane?.cwd || f?.cwd || space?.folder, on, space: space?.id };
 }

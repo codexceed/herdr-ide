@@ -27,13 +27,15 @@ Left to right, the same frame as Herdr's `main` layout:
     `input` color): the subagent's task, how long it has run (`2m`), and a spinner.
   - **Footer** (`ide-chrome` with `{footer: true}`): Settings, Add machine.
 - **Work area**: the shipped tab bar, then the active tab's panes as cards with the
-  shipped `pane` header. Panes can be terminals, agents or **editor panes** (`ide-editor`):
+  pane header (`ide-pane`: the shipped `pane` header plus find). Panes can be terminals,
+  agents or **editor panes** (`ide-editor`):
   - a 34px tab strip in `chrome` (active tab on `background` with a 1px `accent` top edge,
     a × on each tab), and on the right a preview/source toggle (markdown files only) and a
     split button;
   - a 24px breadcrumb with the file's path (`~/…`);
   - the file as a read-only code view with line numbers and syntax colors, or rendered
-    markdown (24px side padding, 14px text) with diagrams as centered images.
+    markdown (24px side padding, 14px text in the system UI font) with diagrams as centered
+    images.
 - **Files panel** on the right (`ide-files`, hidden until the tab bar's Files button):
   the focused pane's folder as a lazy tree with git marks (A / M / D / U).
 - Status bar (shipped `workspace-status`).
@@ -42,7 +44,8 @@ Left to right, the same frame as Herdr's `main` layout:
 
 - **Agents:** an agent's own status works as in Herdr (working spinner, `Needs you`,
   done dot, idle ring). Subagent rows appear while the subagent runs and **disappear when
-  it finishes**; a failed one shows `Needs you` until it's gone. A running subagent
+  it finishes**; one waiting on its own background work shows the idle ring; a failed one
+  shows `Needs you` until it's gone. A running subagent
   counts toward its parent's place in the Working section. Clicking a subagent row
   focuses its parent's pane; hovering shows the full task. The parent's chevron folds the
   tree. The tree refreshes every 3 s.
@@ -61,6 +64,11 @@ Left to right, the same frame as Herdr's `main` layout:
 - **Keys:** ⌘⇧V and ⌘\\ work while this layout shows (`layout:herdr-ide`); ⌘W closes a
   file tab while an editor pane has the keyboard (elsewhere it still closes the Herdr
   tab). Splits are Herdr's own: ⌘D right, ⌘⇧D down.
+- **Find:** ⌘F (`layout:herdr-ide`) turns the focused pane's header into a find bar over
+  that pane: query, `3 of 120`, ↑↓ (or the chevrons) to step, Enter copies the line,
+  Esc or × closes. Terminals search their screen plus 10,000 lines of history (`hc read`)
+  and show the current match's line in the bar; editor panes search the open file and
+  list every match under the breadcrumb. Matches are lines, newest first, any case.
 
 ## Built from
 
@@ -86,7 +94,9 @@ Left to right, the same frame as Herdr's `main` layout:
     by the optional `claude_hook.py` SessionStart hook), else the newest transcript in
     `~/.claude/projects/<folder>/`; subagents from
     `<session>/subagents/agent-*.meta.json` (`description`, `agentType`, `finished`) and
-    the `.jsonl`'s times.
+    the `.jsonl`: running while it ends mid tool call or was written in the last 2 min;
+    waiting while the parent transcript's latest `<task-notification>` about it says
+    "is waiting on its own background work".
   - Codex: the newest top-level thread for the folder in `~/.codex/state_5.sqlite`,
     children from `thread_spawn_edges` (nickname, `agent_path`), status from the last row
     of `thread_turns` in `thread_history_1.sqlite`; both opened read-only.
@@ -94,14 +104,29 @@ Left to right, the same frame as Herdr's `main` layout:
   folder (its first terminal's live `cwd`), as the shipped `spaces` mod does; the branch
   from `git symbolic-ref --short -q HEAD`, else `git rev-parse --short HEAD`.
 - `ide-chrome`: the shipped `workspace-chrome` with `fitBrand()` resizing `brand`.
+- `ide-pane`: the shipped `pane` header plus a find mode. `ide-pane.find` reaches every
+  header; the focused pane's opens. It keeps `shared("ide-find")` = `{[pane]: {query, at,
+  matches?}}`, one entry per open bar; for an editor pane `matches` carries each line cut
+  around the hit, which `ide-editor` draws as its list. Each load or close bumps a
+  generation, so a read that finishes late is dropped; an editor bar reloads when the
+  editor's active file changes.
 - Programs: `mmdc` (`@mermaid-js/mermaid-cli`), `python3`, `sips` (macOS), `sh`.
   Icons: its own SVGs plus the shipped `workspace-chrome` icons used by `ide-agents`.
 
 ## Watch out
 
-- A pane mod's `props()` holds only what it was opened with, not its pane id: the editor
-  learns its pane from `focused()` after a click or its creation, and names itself with
-  a `group` prop.
+- A pane mod's `props()` holds only what it was opened with, not its pane id, and
+  `pane.split` returns nothing to a mod (`panes()` catches up later). The editor names
+  itself with a `group` prop and learns its pane from `focused()` after a click, or as the
+  one editor pane in its tab that no other open group owns. It never takes an owned pane.
+- Geist, the default UI font, has no bold or italic faces: the markdown preview uses
+  `.SystemUIFont` so `**bold**` and `*italic*` show.
+- Herdr routes a mouse-up over another pane away from the preview, so a selectable
+  `TextView` can be left mid-drag and select on hover. Only the focused pane's preview is
+  selectable, and leaving the pane remounts its text. The selection itself is drawn in the
+  theme's `selection` color over the text; a mod can't restyle it.
+- A mod pane has no folder: while an editor pane has focus, Files keeps showing the
+  folder of the tab's last focused terminal.
 - `shared.json` edited on disk doesn't reach a running app: seed new editor panes
   through `props.seed`, not the file.
 - Core's terminal `cwd` can be where the shell started, not the agent's folder; match
@@ -109,14 +134,21 @@ Left to right, the same frame as Herdr's `main` layout:
 - `mmdc` needs a browser: npm may block puppeteer's postinstall, so install
   `chrome-headless-shell` with `npx puppeteer browsers install` from mermaid-cli's
   folder. Render to PNG: SVG labels use `foreignObject`, which the image loader drops.
-- Claude subagents silent for 2 minutes count as stopped; Codex threads open for 6 hours
-  without a finished turn count as orphaned.
+- A Claude subagent's `finished` is set at every turn end and stays set after a revive,
+  and a long tool call writes nothing until it returns: neither silence nor `finished`
+  alone says it stopped. Silent 2 minutes outside a tool call counts as stopped; running a
+  tool or waiting for 6 hours, like a Codex thread open that long without a finished turn,
+  counts as orphaned.
 - Diagram sizing uses `sips`, so mermaid previews are macOS-only as built.
 - Without the Claude hook, two Claude terminals in the same folder show the same
   session's subagents.
 - `flex_shrink(value)` needs a number (`flex_shrink_1()` doesn't); `herdr-app check` won't
   catch it in rows that only draw once the git answer arrives — look at the window.
 - Editor panes are read-only; tabs can't be dragged between panes.
+- Find can't jump: Herdr has no API to scroll a terminal or the code view, or to place a
+  popup over a pane, hence a bar in the pane's header and Enter copying the line.
+- Never cut a JS string inside a surrogate pair: half an emoji is invalid UTF-8 and the
+  frame fails to draw ("Conversion from string failed").
 
 ## Done when
 

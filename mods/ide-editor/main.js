@@ -6,11 +6,12 @@
 // The Files panel (mods/ide-files) adds tabs to the most recently used group of the
 // current Herdr tab, or splits a new group to the right.
 // Commands (keys.json): ide-editor.markdown (cmd-shift-v), .split (cmd-\), .close (cmd-w).
+// Find (cmd-f) lives in the pane header (mods/ide-pane); this pane lists its matches.
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, TextView } from "gpui-base";
 import { props, shared, setShared, focused, panes, run, exec, readTextFile, theme, settings, appHome, home, nextCommand } from "herdr";
 
-const KEY = "ide-editor.groups", ACTIVE = "ide-editor.active", MOD = "ide-editor";
+const KEY = "ide-editor.groups", ACTIVE = "ide-editor.active", MOD = "ide-editor", FIND = "ide-find";
 const LANG = { ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js", toml: "yaml", jsonc: "json", svelte: "html", vue: "html" };
 const keyOf = t => `${t.on ?? ""}:${t.path}`;
 const nameOf = path => path.split(/[\\/]/).pop();
@@ -40,6 +41,13 @@ const parts = text => {
   if (last < text.length) out.push({ md: text.slice(last) });
   return out;
 };
+// mmdc prints the parse error, then a stack trace; keep the error.
+const mermaidError = stderr => {
+  const lines = stderr.trim().split("\n"), end = lines.findIndex(l => /^\s*at\s|\(\S+:\d+:\d+\)$/.test(l));
+  return lines.slice(0, end < 0 ? lines.length : end).join("\n").replace(/^Error:\s*/, "").trim();
+};
+// Geist, the UI font, ships without bold or italic faces; the system font has both.
+const PREVIEW_FONT = ".SystemUIFont";
 const diagrams = new Map(); // shared by every group in this mod: hash -> { state, path, w, h, error }
 
 export default class EditorGroup extends View {
@@ -49,9 +57,11 @@ export default class EditorGroup extends View {
     this.handle = cx.focus_handle();
     this.pane = this.group().pane;
     this.claimPane = false; // restored background groups must not claim global focus
-    // props.seed = { tabs: [{ path, on }], active?, preview? } fills a brand-new group.
+    this.gen = 0; // bumped when this pane loses focus, to remount the preview's text
+    // props.seed = { tabs: [{ path, on }], active?, preview? } fills a brand-new group. Without
+    // a group prop (herdr-app check runs init too) nothing is saved until the pane is used.
     const seed = props()?.seed;
-    this.edit(g => {
+    if (props()?.group) this.edit(g => {
       if (seed?.tabs?.length && !g.tabs.length) {
         g.tabs = seed.tabs.map(t => ({ path: t.path, on: t.on ?? null }));
         g.active = seed.active ?? keyOf(g.tabs[0]); g.preview = seed.preview ?? [];
@@ -62,11 +72,21 @@ export default class EditorGroup extends View {
       for (;;) {
         const c = await nextCommand();
         if (c === "focus") { this.handle.focus(); this.activate(); }
-        else if (shared(ACTIVE) === this.gid) this.command(c, cx);
+        else if (shared(ACTIVE) === this.gid) { this.learnPane(); this.command(c, cx); }
         cx.notify();
       }
     });
-    cx.timer.every(3000, cx => this.reload(cx));
+    cx.timer.every(3000, cx => { this.learnPane(); this.reload(cx); });
+  }
+
+  // Our pane id isn't a prop. Short of focus telling us (render), it's the one editor pane in
+  // our tab that no other open group owns: a split or a Files click leaves exactly one.
+  learnPane() {
+    if (this.pane && panes().some(p => p.pane === this.pane)) return;
+    const g = this.group(), groups = all();
+    const owned = new Set(Object.entries(groups).filter(([id, x]) => id !== this.gid && x.open && x.pane).map(([, x]) => x.pane));
+    const free = panes().filter(p => p.mod === MOD && p.tab === g.tab && !owned.has(p.pane));
+    if (free.length === 1) { this.pane = free[0].pane; this.edit(x => { x.pane = this.pane; }); }
   }
 
   async close() {
@@ -114,6 +134,7 @@ export default class EditorGroup extends View {
       if (g.active === k) g.active = g.tabs.length ? keyOf(g.tabs[Math.min(i, g.tabs.length - 1)]) : null;
       empty = !g.tabs.length;
     });
+    this.learnPane();
     if (empty && this.pane && panes().some(p => p.pane === this.pane)) run("pane.close", { pane: this.pane });
   }
 
@@ -169,7 +190,7 @@ export default class EditorGroup extends View {
         try {
           const r = await exec("sh", ["-c", MMDC, "mermaid", source, `${appHome()}/${d.path}`, theme_]);
           const [w, h] = r.stdout.trim().split(/\s+/).map(Number);
-          if (r.code !== 0 || !w || !h) throw new Error(r.stderr.trim().split("\n").slice(-3).join("\n") || "mmdc failed (is @mermaid-js/mermaid-cli installed?)");
+          if (r.code !== 0 || !w || !h) throw new Error(mermaidError(r.stderr) || "mmdc failed (is @mermaid-js/mermaid-cli installed?)");
           Object.assign(d, { state: "ready", w: w / MERMAID_SCALE, h: h / MERMAID_SCALE });
         } catch (e) { Object.assign(d, { state: "error", error: String(e.message ?? e) }); }
         finally { cx.notify(); }
@@ -180,8 +201,11 @@ export default class EditorGroup extends View {
 
   markdownView(k, text, t, cx) {
     const room = Math.max(120, (this.width ?? 600) - 48);
+    // Only the focused pane's preview takes the mouse: a drag that ends over another pane never
+    // sees its mouse-up, and an unfocused preview would keep selecting on hover.
+    const id = `md-${k}-${this.gen}`;
     return parts(body(text)).map((part, i) => {
-      if (part.md !== undefined) return TextView.markdown(`md-${k}-${i}`, part.md).selectable();
+      if (part.md !== undefined) return TextView.markdown(`${id}-${i}`, part.md).selectable(this.here);
       const d = this.diagram(part.mermaid, cx);
       if (d.state === "ready") {
         const s = Math.min(1, room / d.w);
@@ -190,7 +214,7 @@ export default class EditorGroup extends View {
       if (d.state === "pending") return div().py(8).text_size(12).text_color(t.dim).child("Rendering diagram…");
       return v_flex().py(8).gap(4)
         .child(div().text_size(12).text_color(t.ansi1).child(`Mermaid error: ${d.error}`))
-        .child(TextView.markdown(`md-${k}-${i}-src`, "```mermaid\n" + part.mermaid + "```").selectable());
+        .child(TextView.markdown(`${id}-${i}-src`, "```mermaid\n" + part.mermaid + "```").selectable(this.here));
     });
   }
 
@@ -199,6 +223,22 @@ export default class EditorGroup extends View {
       .hover(s => s.bg(t.hover).text_color(t.foreground))
       .on_click((_e, cx) => { cx.stop_propagation(); onClick(cx); cx.notify(); })
       .child(svg(`mods/${MOD}/${icon}.svg`).size(14));
+  }
+
+  // The header's find matches for this pane: line number, then the line cut around the hit.
+  findList(t) {
+    const f = shared(FIND)?.[this.pane];
+    if (!this.pane || !f?.matches?.length) return null;
+    return v_flex().id("eg-find").flex_none().max_h(220).overflow_y_scrollbar().py(4).border_b(1).border_color(t.border)
+      .bg(t.chrome).font_family(settings().font_family).text_size(12)
+      .children(f.matches.map((m, i) => h_flex().id(`eg-find-${i}`).h(22).flex_none().px(10).gap(10).items_center().cursor_pointer()
+        .bg(i === f.at ? t.selected : t.chrome).hover(s => s.bg(t.hover))
+        .on_click((_e, cx) => { setShared(FIND, { ...shared(FIND), [this.pane]: { ...f, at: i } }); cx.notify(); })
+        .child(div().w(40).flex_none().text_right().text_color(t.dim).child(String(m.n)))
+        .child(h_flex().flex_1().min_w(0).overflow_hidden().whitespace_nowrap().text_color(t.muted)
+          .child(div().flex_none().child(m.parts[0]))
+          .child(div().flex_none().rounded(3).bg(t.accent).text_color(t.accent_foreground).child(m.parts[1]))
+          .child(div().flex_1().min_w(0).truncate().child(m.parts[2])))));
   }
 
   tabStrip(g, t) {
@@ -228,14 +268,20 @@ export default class EditorGroup extends View {
   }
 
   render(cx) {
-    // Our pane id isn't a prop; learn it from focus right after we were clicked or created.
+    // Our pane id isn't a prop; learn it from focus right after we were clicked or created,
+    // unless another open group already owns the focused pane.
     if (this.claimPane || this.handle.is_focused()) {
       const f = focused()?.pane, p = f && panes().find(x => x.pane === f);
-      if (p?.mod === MOD) {
+      const taken = Object.entries(shared(KEY) ?? {}).some(([id, x]) => id !== this.gid && x.open && x.pane === f);
+      if (p?.mod === MOD && !taken) {
         this.claimPane = false;
         if (this.pane !== f) { this.pane = f; this.edit(g => { g.pane = f; }); }
       }
     }
+    if (!this.pane) this.learnPane();
+    const here = this.pane ? focused()?.pane === this.pane : this.handle.is_focused();
+    if (this.here && !here) this.gen++;
+    this.here = here;
     const t = theme(), g = this.group(), tab = g.tabs.find(x => keyOf(x) === g.active);
     const k = tab ? keyOf(tab) : null, d = k ? this.docs.get(k) : null;
     if (tab && !d) this.load(tab, cx);
@@ -248,10 +294,11 @@ export default class EditorGroup extends View {
       .child(this.tabStrip(g, t))
       .when(Boolean(tab), el => el.child(h_flex().h(24).flex_none().px(12).items_center().text_size(11).text_color(t.dim)
         .child(div().flex_1().min_w(0).truncate().child(rel))))
+      .when(Boolean(this.findList(t)), el => el.child(this.findList(t)))
       .child(!tab
         ? v_flex().flex_1().items_center().justify_center().text_color(t.dim).child("No open files · pick one in Files")
         : preview
-          ? v_flex().id(`eg-md-${k}`).flex_1().min_h(0).overflow_y_scrollbar().px(24).py(16).text_size(14)
+          ? v_flex().id(`eg-md-${k}`).flex_1().min_h(0).overflow_y_scrollbar().px(24).py(16).text_size(14).font_family(PREVIEW_FONT)
               .on_size_change((size, cx) => { if (size.width !== this.width) { this.width = size.width; cx.notify(); } })
               .children(this.markdownView(k, d.text, t, cx))
           : d?.code ? Editor.new(d.code).flex_1().min_h(0)
