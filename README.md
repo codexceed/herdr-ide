@@ -16,7 +16,8 @@ git clone https://github.com/codexceed/herdr-ide.git && python3 herdr-ide/instal
 
 It copies the layout and its five mods into `~/.config/herdr-app`, merges four key
 bindings into your `keys.json`, installs `@mermaid-js/mermaid-cli` if `mmdc` is missing,
-runs `herdr-app check` on each mod and switches the window to the layout.
+runs `herdr-app check` on each mod and switches the window to the layout. If Herdr isn't
+running (or has never run), it opens on the layout the next time it starts.
 
 - Rerunning updates in place; older copies go to `~/.config/herdr-app/backups/`.
 - A key you already use for something else is kept and reported (`--replace-keys` takes it).
