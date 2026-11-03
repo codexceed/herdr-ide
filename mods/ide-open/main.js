@@ -11,6 +11,8 @@ import { spaces, panes, focused, exec, hc, home, theme, shared, setShared, run, 
 
 const GROUPS = "ide-editor.groups", ACTIVE = "ide-editor.active", RECENT = "ide-open.recent";
 const MAX_FILES = 50000, SHOWN = 60, ROWS = 12, ROW = 30, HISTORY = 2000, CANDIDATES = 300;
+// Paths ranked per task resumption: 1,000 take ~30 ms in Herdr, against a 500 ms limit.
+const SLICE = 1000;
 
 // ---- paths
 
@@ -29,22 +31,41 @@ const display = (abs, root, h) =>
   root && abs.startsWith(root + "/") ? abs.slice(root.length + 1)
     : h && abs.startsWith(h + "/") ? "~" + abs.slice(h.length) : abs;
 
-// The file-looking words in terminal text, newest (last) first, without `:line:col` or a
-// sentence's period. Only the ones that exist survive, so loose matches cost nothing.
-const PATHISH = /(?:file:\/\/)?(?:~\/|\.\.?\/|\/)?[\w@+.%-]+(?:\/[\w@+.%-]+)*/g;
+// The file-looking words in terminal text, newest (last) first, without a sentence's period.
+// Only the ones that exist survive, so loose matches cost nothing.
+// - bare: letters in any script, digits, `[id]`-style brackets and shell-escaped spaces (`a\ b`);
+// - quoted or backticked: the whole span, so `path with space/notes.md` stays one path.
+// `:line:col` is cut by the bare pattern and by resolve() for quoted spans.
+const WORD = String.raw`(?:[\p{L}\p{N}\p{M}_@+.%\[\]-]|\\ )+`;
+const PATHISH = new RegExp(String.raw`(?:file://)?(?:~/|\.\.?/|/)?${WORD}(?:/${WORD})*`, "gu");
+// One pattern per quote pair, so an apostrophe in prose can't swallow a backticked path.
+const QUOTED = ["``", '""', "''", "“”", "‘’"].map(([open, close]) => new RegExp(`${open}([^\`"'“”‘’\\n]{1,1024})${close}`, "gu"));
+const EXT = /\.[\p{L}\p{N}]{1,10}(?::\d+){0,2}$/u;
+// One raw match -> the candidates to try: itself, then without wrapping brackets.
+function candidates(raw) {
+  let p = raw.trim();
+  if (p.startsWith("file://")) { try { p = decodeURIComponent(p.slice(7)); } catch { return []; } }
+  p = p.replace(/\\ /g, " ").replace(/[.,;]+$/, "");
+  const out = [p];
+  const bare = p.replace(/^[[(<]+/, "").replace(/[\])>]+$/, "");
+  if (bare !== p) out.push(bare);
+  // A path has a folder or an extension; "e.g" and "v0.1" fail the existence check later.
+  return out.filter(c => c && c !== "/" && c !== "~/" && (c.includes("/") || EXT.test(c)));
+}
 const pathsIn = text => {
   const seen = new Set(), out = [];
   const lines = text.split("\n");
   for (let i = lines.length - 1; i >= 0 && out.length < CANDIDATES; i--) {
-    const found = [...lines[i].matchAll(PATHISH)].map(m => m[0]).reverse();
-    for (let p of found) {
-      if (p.startsWith("file://")) { try { p = decodeURIComponent(p.slice(7)); } catch { continue; } }
-      p = p.replace(/[.]+$/, "");
-      // A path has a folder or an extension; "e.g" and "v0.1" fail the existence check later.
-      if (!p.includes("/") && !/\.[A-Za-z0-9]{1,10}$/.test(p)) continue;
-      if (p === "/" || p === "~/" || seen.has(p)) continue;
-      seen.add(p); out.push(p);
-      if (out.length >= CANDIDATES) break;
+    const line = lines[i], found = [];
+    for (const re of QUOTED) for (const m of line.matchAll(re)) found.push([m.index + m[0].length, m[1]]);
+    for (const m of line.matchAll(PATHISH)) found.push([m.index + m[0].length, m[0]]);
+    // The one ending rightmost first; a quoted span before the bare words inside it.
+    found.sort((a, b) => b[0] - a[0] || b[1].length - a[1].length);
+    for (const [, raw] of found) {
+      for (const p of candidates(raw)) {
+        if (seen.has(p) || out.length >= CANDIDATES) continue;
+        seen.add(p); out.push(p);
+      }
     }
   }
   return out;
@@ -69,64 +90,86 @@ function bonus(text, i, base) {
   return b;
 }
 
-// Best alignment of one term in `text`: { score, hits } or null when it isn't a subsequence.
-function align(term, text) {
-  const t = text.toLowerCase(), n = t.length, m = term.length;
+// Best alignment of one term in `text` (`t` is it lowercased): { score, hits } or null when it
+// isn't a subsequence. The score table is one flat buffer reused across calls; a path costs
+// ~45 µs in Herdr's QuickJS, so allocation matters.
+const NEG = -1e9;
+let table = new Float64Array(1024), back = new Int32Array(1024);
+function align(term, text, t = text.toLowerCase()) {
+  const n = t.length, m = term.length;
   // Fast reject.
   for (let i = 0, j = 0; ; i++) {
     if (j === m) break;
     if (i === n) return null;
     if (t[i] === term[j]) j++;
   }
-  const base = text.lastIndexOf("/") + 1, NEG = -1e9;
-  const M = Array.from({ length: m }, () => new Float64Array(n).fill(NEG));
-  const from = Array.from({ length: m }, () => new Int32Array(n).fill(-1));
+  if (table.length < m * n) { table = new Float64Array(m * n * 2); back = new Int32Array(m * n * 2); }
+  const M = table;
+  M.fill(NEG, 0, m * n);
+  const base = text.lastIndexOf("/") + 1;
   for (let j = 0; j < m; j++) {
+    const row = j * n, prev = row - n, c = term[j];
     let gap = NEG, gapAt = -1;
     for (let i = j; i < n; i++) {
       // gap: best earlier match of term[j-1] ending at k <= i-2, minus 3 to open and 1 per char.
-      if (j > 0 && i >= 2 && M[j - 1][i - 2] - 3 > gap - 1) { gap = M[j - 1][i - 2] - 3; gapAt = i - 2; } else gap -= 1;
-      if (t[i] !== term[j]) continue;
+      if (j > 0) { if (i >= 2 && M[prev + i - 2] - 3 > gap - 1) { gap = M[prev + i - 2] - 3; gapAt = i - 2; } else gap -= 1; }
+      if (t[i] !== c) continue;
       const own = 16 + bonus(text, i, base);
-      if (j === 0) { M[0][i] = own; continue; }
-      const run = M[j - 1][i - 1] > NEG ? M[j - 1][i - 1] + 4 : NEG;
-      if (run >= gap && run > NEG) { M[j][i] = own + run; from[j][i] = i - 1; }
-      else if (gap > NEG / 2) { M[j][i] = own + gap; from[j][i] = gapAt; }
+      if (j === 0) { M[i] = own; continue; }
+      const run = M[prev + i - 1] > NEG ? M[prev + i - 1] + 4 : NEG;
+      if (run >= gap && run > NEG) { M[row + i] = own + run; back[row + i] = i - 1; }
+      else if (gap > NEG / 2) { M[row + i] = own + gap; back[row + i] = gapAt; }
     }
   }
+  const last = (m - 1) * n;
   let end = -1, score = NEG;
-  for (let i = 0; i < n; i++) if (M[m - 1][i] > score) { score = M[m - 1][i]; end = i; }
+  for (let i = 0; i < n; i++) if (M[last + i] > score) { score = M[last + i]; end = i; }
   if (end < 0) return null;
   const hits = [];
-  for (let j = m - 1, i = end; j >= 0; i = from[j][i], j--) hits.push(i);
+  for (let j = m - 1, i = end; j >= 0; i = back[j * n + i], j--) hits.push(i);
   return { score, hits: hits.reverse() };
 }
 
+const termsOf = query => query.toLowerCase().split(/\s+/).filter(Boolean);
+
 // Space-separated terms must all match (any order), like VS Code. Shorter file names, then
 // shorter paths, win ties: "main" ranks main.js over MAINTAINERS.
-function score(query, text) {
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+function scoreTerms(terms, text, lower) {
   let total = -0.3 * (text.length - text.lastIndexOf("/") - 1) - 0.02 * text.length;
   const hits = new Set();
   for (const term of terms) {
-    const a = align(term, text);
+    const a = align(term, text, lower);
     if (!a) return null;
     total += a.score;
     a.hits.forEach(h => hits.add(h));
   }
   return { score: total, hits: [...hits].sort((a, b) => a - b) };
 }
+const score = (query, text) => scoreTerms(termsOf(query), text, text.toLowerCase());
 
-// Items ({ path, ... }) that match, best first; ties go to the shorter path.
-function rank(query, items, limit = SHOWN) {
-  const out = [];
-  for (const item of items) {
-    const s = score(query, item.path);
-    if (s) out.push({ ...item, score: s.score + (item.boost ?? 0), hits: s.hits });
+const better = (a, b) => b.score - a.score || a.path.length - b.path.length;
+
+// Scores items[from, to) ({ path, boost? }) into `top` (best first, at most `limit`) and
+// collects every match into `matched`. One slice at a time keeps each host call short.
+function rankInto(terms, items, from, to, top, matched = null, limit = SHOWN) {
+  const floor = top.length >= limit ? top[top.length - 1].score : -Infinity;
+  let added = false;
+  for (let i = from; i < Math.min(to, items.length); i++) {
+    const item = items[i];
+    const s = scoreTerms(terms, item.path, item.lower ??= item.path.toLowerCase());
+    if (!s) continue;
+    matched?.push(item);
+    const total = s.score + (item.boost ?? 0);
+    if (total < floor) continue;
+    top.push({ ...item, score: total, hits: s.hits });
+    added = true;
   }
-  out.sort((a, b) => b.score - a.score || a.path.length - b.path.length);
-  return out.slice(0, limit);
+  if (added) { top.sort(better); top.length = Math.min(top.length, limit); }
+  return top;
 }
+
+// Items that match, best first; ties go to the shorter path.
+const rank = (query, items, limit = SHOWN) => rankInto(termsOf(query), items, 0, items.length, [], null, limit);
 
 // ---- opening (the same as a Files click: mods/ide-files openFile)
 
@@ -159,21 +202,29 @@ function context() {
   // The focused terminal first, then the tab's others (an editor pane has no folder).
   terminals.sort((a, b) => (b.pane === mine?.pane) - (a.pane === mine?.pane));
   const cwd = (mine?.terminal && mine.cwd) || terminals.find(p => p.cwd)?.cwd || f?.cwd || space?.folder || home();
-  return { cwd, on: space?.machine ?? null, tab, pane: mine?.pane ?? null, terminals: terminals.map(p => p.terminal) };
+  // Each terminal keeps its own folder: a relative path it printed is relative to it.
+  return { cwd, on: space?.machine ?? null, tab, pane: mine?.pane ?? null, terminals: terminals.map(p => ({ terminal: p.terminal, cwd: p.cwd || cwd })) };
 }
+
+const typed = q => q.startsWith("/") || q.startsWith("~");
 
 export default class Open extends View {
   init(_props, cx) {
     this.ctx = context();
     this.root = null; this.files = null; this.printed = []; this.error = null; this.notice = null;
     this.query = ""; this.at = 0; this.top = 0;
+    this.gen = 0; this.found = null; this.last = null; this.enter = false;
     this.input = InputState.new({ placeholder: "Go to file, or type a path (/… or ~/…)" });
-    this.input.on("change", (_e, cx) => { this.query = this.input.value(); this.at = 0; this.top = 0; this.notice = null; cx.notify(); });
-    this.input.on("submit", (_e, cx) => this.pick(this.rows()[this.at], cx));
+    this.input.on("change", (_e, cx) => {
+      this.query = this.input.value(); this.at = 0; this.top = 0; this.notice = null; this.enter = false;
+      this.search(cx); cx.notify();
+    });
+    // Enter before the ranking for this query finished: open its best file once it has.
+    this.input.on("submit", (_e, cx) => { if (this.settled()) this.pick(this.rows()[this.at], cx); else this.enter = true; });
     this.input.focus();
     cx.timer.after(600, () => this.input.focus());
-    cx.spawn(async cx => { await this.list(); cx.notify(); });
-    cx.spawn(async cx => { await this.scan(); cx.notify(); });
+    cx.spawn(async cx => { await this.list(); this.search(cx); cx.notify(); });
+    cx.spawn(async cx => { await this.scan(); this.search(cx); cx.notify(); });
   }
 
   close() { closeOverlay(props().overlay); }
@@ -201,13 +252,13 @@ export default class Open extends View {
 
   // Files the tab's terminals printed that exist, newest first (focused terminal first).
   async scan() {
-    const { cwd, on, terminals } = this.ctx, h = home();
-    const words = [];
-    for (const t of terminals) {
-      const r = await hc(["read", t, "--lines", String(HISTORY)]).catch(() => null);
-      if (r?.code === 0) words.push(...pathsIn(r.stdout));
+    const { on, terminals } = this.ctx, h = home();
+    const found = [];
+    for (const { terminal, cwd } of terminals) {
+      const r = await hc(["read", terminal, "--lines", String(HISTORY)]).catch(() => null);
+      if (r?.code === 0) found.push(...pathsIn(r.stdout).map(w => resolve(w, cwd, h)));
     }
-    const wanted = [...new Set(words.map(w => resolve(w, cwd, h)))].slice(0, CANDIDATES);
+    const wanted = [...new Set(found)].slice(0, CANDIDATES);
     if (!wanted.length) return;
     const r = await exec("sh", ["-c", 'for p; do [ -f "$p" ] && printf "%s\\0" "$p"; done; true', "exists", ...wanted], { on }).catch(() => null);
     const there = new Set((r?.stdout ?? "").split("\0").filter(Boolean));
@@ -219,26 +270,75 @@ export default class Open extends View {
     return (shared(RECENT) ?? []).filter(x => (x.on ?? null) === on && !this.printed.includes(x.path)).map(x => x.path);
   }
 
-  // Rows: { abs, path (as shown), hits, tag }. Ranking 50k paths is too slow for every frame.
-  rows() {
-    const key = JSON.stringify([this.query, this.root, this.files?.length, this.printed.length, (shared(RECENT) ?? []).length]);
-    if (this.memo?.key !== key) this.memo = { key, rows: this.compute() };
-    return this.memo.rows;
+  // Which listing a search ran over; it changes as the listing and the terminal scan land.
+  key() { return `${this.root}|${this.files?.length}|${this.printed.length}`; }
+
+  // Printed, then recent: at most a few hundred, cheap enough for render.
+  first() {
+    const key = this.key();
+    if (this.firstMemo?.key !== key) {
+      const h = home(), root = this.root;
+      const item = (abs, tag, boost) => ({ abs, path: display(abs, root, h), tag, boost });
+      this.firstMemo = { key, rows: [...this.printed.map(p => item(p, "terminal", 12)), ...this.recent().map(p => item(p, "recent", 6))] };
+    }
+    return this.firstMemo.rows;
   }
 
-  compute() {
+  // Everything a query searches: first(), then the root's other files. Built in a task only.
+  pool() {
+    const key = this.key();
+    if (this.poolMemo?.key !== key) {
+      const first = this.first(), known = new Set(first.map(x => x.abs)), all = [...first];
+      for (const p of this.files ?? []) {
+        const abs = `${this.root}/${p}`;
+        if (!known.has(abs)) all.push({ abs, path: p, tag: null });
+      }
+      this.poolMemo = { key, all };
+    }
+    return this.poolMemo;
+  }
+
+  // Ranks the query off the render path. Herdr stops a render after 50 ms and each task
+  // resumption after 500 ms, and 50,000 paths take seconds, so the work goes in slices with
+  // a yield between them. Results show as they improve; a newer query abandons the old one.
+  // A query that extends the last finished one only re-ranks that one's matches.
+  search(cx) {
+    const gen = ++this.gen, q = this.query.trim();
+    if (!q || typed(q)) return;
+    cx.spawn(async cx => {
+      const pool = this.pool(), terms = termsOf(q);
+      const narrow = this.last?.key === pool.key && q.toLowerCase().startsWith(this.last.q);
+      const items = narrow ? this.last.matched : pool.all;
+      const top = [], matched = [];
+      let shown = 0;
+      for (let i = 0; i < items.length; i += SLICE) {
+        if (i) { await cx.sleep(0); if (gen !== this.gen) return; }
+        rankInto(terms, items, i, i + SLICE, top, matched);
+        if (Date.now() - shown > 80) { this.found = { q, key: pool.key, rows: top.slice(), done: false }; shown = Date.now(); cx.notify(); }
+      }
+      if (gen !== this.gen) return;
+      this.found = { q, key: pool.key, rows: top, done: true };
+      this.last = { key: pool.key, q: q.toLowerCase(), matched };
+      if (this.enter && this.settled()) { this.enter = false; this.pick(top[this.at], cx); }
+      cx.notify();
+    });
+  }
+
+  // Whether rows() is final for the query: ranked to the end, over the full listing.
+  settled() {
+    const q = this.query.trim();
+    return !q || typed(q) || (this.files !== null && this.found?.q === q && this.found.done && this.found.key === this.key());
+  }
+
+  // Rows: { abs, path (as shown), hits, tag }. Cheap lists here; a query's come from search().
+  rows() {
     const q = this.query.trim(), h = home(), root = this.root;
-    const item = (abs, tag, boost = 0) => ({ abs, path: display(abs, root, h), tag, boost });
-    if (q.startsWith("/") || q.startsWith("~")) {
+    if (typed(q)) {
       const abs = resolve(q, this.ctx.cwd, h);
       return [{ abs, path: display(abs, root, h), hits: [], tag: "path", typed: true }];
     }
-    const printed = this.printed.map(p => item(p, "terminal", 12));
-    const recent = this.recent().map(p => item(p, "recent", 6));
-    if (!q) return [...printed, ...recent].slice(0, SHOWN).map(x => ({ ...x, hits: [] }));
-    const known = new Set([...printed, ...recent].map(x => x.abs));
-    const files = (this.files ?? []).map(p => ({ abs: `${root}/${p}`, path: p, tag: null })).filter(x => !known.has(x.abs));
-    return rank(q, [...printed, ...recent, ...files]);
+    if (!q) return this.first().slice(0, SHOWN).map(x => ({ ...x, hits: [] }));
+    return this.found?.rows ?? [];
   }
 
   pick(row, cx) {
@@ -297,9 +397,10 @@ export default class Open extends View {
     const q = this.query.trim(), where = this.root ? display(this.root, null, home()) : "…";
     if (this.notice) return this.notice;
     if (this.error) return this.error;
-    if (q.startsWith("/") || q.startsWith("~")) return "Enter opens this path";
+    if (typed(q)) return "Enter opens this path";
     if (this.files === null) return `Listing ${where}…`;
     if (!q) return rows.length ? `${this.files.length.toLocaleString()} files in ${where}` : `Type to search ${this.files.length.toLocaleString()} files in ${where}`;
+    if (!this.settled()) return `Searching ${where}…`;
     return rows.length ? `${where}` : `No files match in ${where}`;
   }
 

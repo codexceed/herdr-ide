@@ -80,7 +80,8 @@ Left to right, the same frame as Herdr's `main` layout:
   as in VS Code: letters in order, word starts, the file name and runs of letters score
   higher; space-separated words must all match. With no query it lists the files the
   tab's terminals printed (last 2,000 lines, newest first, only ones that exist, any
-  folder), then files opened with ⌘P before. A query starting with `/` or `~` is a path:
+  folder; a relative path is read from the folder of the terminal that printed it; a
+  quoted or backticked path keeps its spaces), then files opened with ⌘P before. A query starting with `/` or `~` is a path:
   Enter opens it wherever it is, or says it's a folder or missing. Enter opens a file
   like a Files click; an editor pane that already exists gets the focus. Herdr gives mods
   no Cmd-click on terminal links ([herdr-app#228](https://github.com/herdrdev/herdr-app/issues/228)),
@@ -131,7 +132,11 @@ Left to right, the same frame as Herdr's `main` layout:
   it opens. Ranking is an fzf-style alignment per path (16 per letter, +10 after `/`, +8
   after `-_. `, +7 for camelCase, +6 in the file name, +4 per letter in a run, −3 to open
   a gap and −1 per skipped letter), minus a little per character of the name and path;
-  printed files get +12 and recent ones +6. Rankings are memoized per query. It opens files
+  printed files get +12 and recent ones +6. Herdr stops a render after 50 ms and a task
+  resumption after 500 ms, and a path costs ~30 µs, so ranking runs in a task, 1,000 paths
+  per resumption with `cx.sleep(0)` between; render only reads finished rows, a newer query
+  abandons the old one, a longer one re-ranks only the last one's matches, and Enter during
+  a search opens its best file once it ends. It opens files
   with a copy of `ide-files`' `openFile()` (plus `pane` for the split and `pane.focus` for an
   existing group) and keeps the last 30 in `shared("ide-open.recent")`.
 - Programs: `mmdc` (`@mermaid-js/mermaid-cli`), `python3`, `sips` (macOS), `sh`.
