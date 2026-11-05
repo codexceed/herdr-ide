@@ -8,7 +8,9 @@ stdout:  JSON {address: [{id, name, detail, status, started, ended, depth}]}
 Folders: the agent's own process folder (`hc get`) first, then the ones passed in. The shell
 can start in one repo and the agent run in another, so the first folder with a session wins.
 Claude: the terminal's session comes from data/swarm/claude-<terminal>.json, written by
-claude_hook.py (SessionStart); else the newest transcript in the first folder that has one.
+claude_hook.py (SessionStart); else from ~/.claude/sessions/<pid>.json, which Claude Code keeps
+for each running process (pid from `hc get`); else the newest transcript, not already shown
+under another terminal, in the first folder that has one.
 Each subagent has <session>/subagents/agent-<id>.meta.json + .jsonl. It runs while its log
 ends mid tool call (a long command writes nothing until it returns) or was written in the last
 STALE seconds; it waits while its parent's latest notification about it says it is waiting on
@@ -34,13 +36,29 @@ WAITING = b"is waiting on its own background work"
 now = time.time()
 
 
+_foreground = {}
+
+
+def foreground(address):
+    """The terminal's foreground program (the agent) per `hc get`: {"pid", "cwd", ...}, or {}."""
+    if address not in _foreground:
+        try:
+            r = subprocess.run(["hc", "get", address, "--json"], capture_output=True, text=True, timeout=2)
+            fg = json.loads(r.stdout).get("foreground") if r.returncode == 0 else None
+        except (OSError, ValueError, subprocess.SubprocessError, AttributeError):
+            fg = None
+        _foreground[address] = fg if isinstance(fg, dict) else {}
+    return _foreground[address]
+
+
 def agent_cwd(address):
-    """Where the terminal's foreground program (the agent) runs, per `hc get`; None if unknown."""
-    try:
-        r = subprocess.run(["hc", "get", address, "--json"], capture_output=True, text=True, timeout=2)
-        return (json.loads(r.stdout).get("foreground") or {}).get("cwd") if r.returncode == 0 else None
-    except (OSError, ValueError, subprocess.SubprocessError, AttributeError):
-        return None
+    """Where the terminal's foreground program (the agent) runs; None if unknown."""
+    return foreground(address).get("cwd")
+
+
+def agent_pid(address):
+    """The terminal's foreground program's pid; None if unknown."""
+    return foreground(address).get("pid")
 
 
 def folders(t):
@@ -49,19 +67,51 @@ def folders(t):
     return list(dict.fromkeys(c for c in [agent_cwd(t["address"]), t.get("cwd"), *given] if c))
 
 
-def claude_session(address, cwds):
+def project(cwd):
+    return os.path.join(HOME, ".claude", "projects", re.sub(r"[^A-Za-z0-9-]", "-", cwd))
+
+
+def hooked_session(address):
+    """The transcript claude_hook.py recorded for this terminal; None without the hook."""
     try:
         with open(os.path.join(APP, "data", "swarm", f"claude-{address}.json")) as f:
             path = json.load(f).get("transcript_path")
-        if path and os.path.exists(path):
-            return path
-    except (OSError, ValueError):
-        pass
+        return path if path and os.path.exists(path) else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def pid_session(address):
+    """The transcript of the Claude process running in this terminal, from the record Claude Code
+    keeps per process in ~/.claude/sessions/<pid>.json; None if there is none."""
+    pid = agent_pid(address)
+    if not pid:
+        return None
+    try:
+        with open(os.path.join(HOME, ".claude", "sessions", f"{pid}.json")) as f:
+            record = json.load(f)
+        sid, cwd = record.get("sessionId"), record.get("cwd")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not sid or record.get("pid", pid) != pid:
+        return None
+    path = os.path.join(project(cwd), f"{sid}.jsonl") if cwd else ""
+    if os.path.exists(path):
+        return path
+    found = glob.glob(os.path.join(HOME, ".claude", "projects", "*", f"{glob.escape(sid)}.jsonl"))
+    return found[0] if found else None
+
+
+def claude_session(address, cwds, taken=()):
+    """The terminal's Claude transcript: exactly (hook, then pid), else a guess by folder that
+    skips transcripts in `taken`, so two terminals in one folder never share a session."""
+    exact = hooked_session(address) or pid_session(address)
+    if exact:
+        return exact
     # Newest transcript in the first folder that has one: newest across all of them would hand
     # this terminal a busier session that only shares the folder its shell started in.
     for cwd in cwds:
-        project = os.path.join(HOME, ".claude", "projects", re.sub(r"[^A-Za-z0-9-]", "-", cwd))
-        sessions = glob.glob(os.path.join(project, "*.jsonl"))
+        sessions = [s for s in glob.glob(os.path.join(project(cwd), "*.jsonl")) if s not in taken]
         if sessions:
             return max(sessions, key=os.path.getmtime)
     return None
@@ -96,8 +146,8 @@ def waiting(transcript, agent):
         return False
 
 
-def claude_children(address, cwds):
-    transcript = claude_session(address, cwds)
+def claude_children(address, cwds, transcript=None):
+    transcript = transcript or claude_session(address, cwds)
     if not transcript:
         return []
     out = []
@@ -180,11 +230,18 @@ def main():
         t["cwds"] = folders(t)
         t["cwd"] = t["cwds"][0] if t["cwds"] else None
     result = {}
-    for t in terminals:
-        if t.get("kind") == "claude":
-            kids = claude_children(t["address"], t["cwds"])
-            if kids:
-                result[t["address"]] = kids
+    claude = [t for t in terminals if t.get("kind") == "claude"]
+    # Exact matches claim their sessions first; folder guesses then take what is left.
+    for t in claude:
+        t["transcript"] = hooked_session(t["address"]) or pid_session(t["address"])
+    taken = {t["transcript"] for t in claude if t["transcript"]}
+    for t in claude:
+        if not t["transcript"]:
+            t["transcript"] = claude_session(t["address"], t["cwds"], taken)
+            taken.add(t["transcript"])
+        kids = claude_children(t["address"], t["cwds"], t["transcript"]) if t["transcript"] else []
+        if kids:
+            result[t["address"]] = kids
     codex = [t for t in terminals if t.get("kind") == "codex" and t.get("cwd")]
     if codex:
         try:

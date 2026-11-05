@@ -28,8 +28,10 @@ Switch layouts any time with ctrl-shift-l (or Settings → Look).
 
 ### Optional: exact Claude sessions
 
-Without a hook, each Claude terminal is matched to the newest session in its folder.
-For an exact match when several Claude terminals share a folder, add this to the
+Each Claude terminal is matched to its session through the record Claude Code keeps
+for every running process (`~/.claude/sessions/<pid>.json`). That record isn't a
+documented interface, so if it's missing the sidebar guesses the newest session in the
+folder that no other terminal shows. For a match that never guesses, add this to the
 `"SessionStart"` list in `~/.claude/settings.json`:
 
 ```json

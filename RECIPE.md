@@ -108,8 +108,10 @@ Left to right, the same frame as Herdr's `main` layout:
   runs `python3 mods/ide-agents/swarm.py '<json>'` with each live Claude/Codex terminal's
   address, kind and folders (the pane's live `cwd` first, then core's).
   - Claude Code: the terminal's session from `data/swarm/claude-<terminal>.json` (written
-    by the optional `claude_hook.py` SessionStart hook), else the newest transcript in
-    `~/.claude/projects/<folder>/`; subagents from
+    by the optional `claude_hook.py` SessionStart hook), else from
+    `~/.claude/sessions/<pid>.json` (Claude Code's record of each running process; `pid`
+    from `hc get`), else the newest transcript in `~/.claude/projects/<folder>/` that no
+    other terminal already shows; subagents from
     `<session>/subagents/agent-*.meta.json` (`description`, `agentType`, `finished`) and
     the `.jsonl`: running while it ends mid tool call or was written in the last 2 min;
     waiting while the parent transcript's latest `<task-notification>` about it says
