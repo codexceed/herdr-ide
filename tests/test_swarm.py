@@ -1,10 +1,14 @@
 """Tests for mods/ide-agents/swarm.py: which Claude subagents count as running, in a temp home."""
+import contextlib
 import importlib.util
+import io
 import json
 import os
+import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("swarm", os.path.join(HERE, "..", "mods", "ide-agents", "swarm.py"))
@@ -86,10 +90,6 @@ class SwarmTest(unittest.TestCase):
         self.assertEqual(self.listed(), {})
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class FolderTest(unittest.TestCase):
     """A shell started in one repo running Claude in another must not show the first repo's agents."""
 
@@ -97,9 +97,11 @@ class FolderTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         swarm.HOME, swarm.APP = self.tmp.name, os.path.join(self.tmp.name, "app")
         self.real_agent_cwd = swarm.agent_cwd
+        swarm._foreground.clear()
 
     def tearDown(self):
         swarm.agent_cwd = self.real_agent_cwd
+        swarm._foreground.clear()
         self.tmp.cleanup()
 
     def session(self, folder, name, age):
@@ -128,3 +130,93 @@ class FolderTest(unittest.TestCase):
     def test_without_hc_the_given_folders_keep_their_order(self):
         swarm.agent_cwd = lambda address: None
         self.assertEqual(swarm.folders({"address": "t1", "cwd": "/a", "cwds": ["/a", "/b"]}), ["/a", "/b"])
+
+
+class SessionTest(unittest.TestCase):
+    """Two Claude terminals in one folder must each show their own session's subagents."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        swarm.HOME, swarm.APP, swarm.now = self.tmp.name, os.path.join(self.tmp.name, "app"), time.time()
+        swarm._foreground.clear()
+
+    def tearDown(self):
+        swarm._foreground.clear()
+        self.tmp.cleanup()
+
+    def session(self, folder, sid, age=0, kid=None):
+        project = swarm.project(folder)
+        os.makedirs(project, exist_ok=True)
+        path = os.path.join(project, f"{sid}.jsonl")
+        open(path, "w").close()
+        t = time.time() - age
+        os.utime(path, (t, t))
+        if kid:
+            subagents = os.path.join(project, sid, "subagents")
+            os.makedirs(subagents)
+            with open(os.path.join(subagents, f"agent-{kid}.meta.json"), "w") as f:
+                json.dump({"description": kid}, f)
+            with open(os.path.join(subagents, f"agent-{kid}.jsonl"), "w") as f:
+                f.write(json.dumps(TOOL) + "\n")
+        return path
+
+    def running(self, address, pid, cwd, sid=None):
+        """Terminal `address` runs Claude as `pid` in `cwd`; with `sid`, Claude Code's record of it."""
+        swarm._foreground[address] = {"pid": pid, "cwd": cwd}
+        if sid:
+            folder = os.path.join(self.tmp.name, ".claude", "sessions")
+            os.makedirs(folder, exist_ok=True)
+            with open(os.path.join(folder, f"{pid}.json"), "w") as f:
+                json.dump({"pid": pid, "sessionId": sid, "cwd": cwd}, f)
+
+    def shown(self, *addresses):
+        argv = [{"address": a, "kind": "claude", "cwd": CWD} for a in addresses]
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), unittest.mock.patch.object(sys, "argv", ["swarm.py", json.dumps(argv)]):
+            swarm.main()
+        return {a: [c["id"] for c in kids] for a, kids in json.loads(out.getvalue()).items()}
+
+    def test_the_process_record_picks_the_session_over_a_newer_one(self):
+        mine = self.session(CWD, "mine", age=600)
+        self.session(CWD, "busy", age=0)
+        self.running("t1", 101, CWD, sid="mine")
+        self.assertEqual(swarm.claude_session("t1", [CWD]), mine)
+
+    def test_a_record_for_another_pid_is_ignored(self):
+        self.session(CWD, "mine", age=600)
+        busy = self.session(CWD, "busy", age=0)
+        self.running("t1", 101, CWD, sid="mine")
+        with open(os.path.join(self.tmp.name, ".claude", "sessions", "101.json"), "w") as f:
+            json.dump({"pid": 999, "sessionId": "mine", "cwd": CWD}, f)
+        self.assertEqual(swarm.claude_session("t1", [CWD]), busy)
+
+    def test_a_session_filed_under_another_folder_is_still_found(self):
+        moved = self.session("/work/elsewhere", "mine")
+        self.running("t1", 101, CWD, sid="mine")
+        self.assertEqual(swarm.claude_session("t1", [CWD]), moved)
+
+    def test_two_terminals_in_one_folder_show_their_own_subagents(self):
+        self.session(CWD, "a", age=600, kid="ka")
+        self.session(CWD, "b", age=0, kid="kb")
+        self.running("t1", 101, CWD, sid="a")
+        self.running("t2", 102, CWD, sid="b")
+        self.assertEqual(self.shown("t1", "t2"), {"t1": ["ka"], "t2": ["kb"]})
+
+    def test_folder_guesses_skip_sessions_another_terminal_holds(self):
+        self.session(CWD, "a", age=600, kid="ka")
+        self.session(CWD, "b", age=0, kid="kb")
+        self.running("t1", 101, CWD, sid="b")
+        self.running("t2", 102, CWD)  # no record: guessed from the folder
+        self.assertEqual(self.shown("t1", "t2"), {"t1": ["kb"], "t2": ["ka"]})
+
+    def test_two_guesses_in_one_folder_never_share_a_session(self):
+        self.session(CWD, "a", age=600, kid="ka")
+        self.session(CWD, "b", age=0, kid="kb")
+        self.running("t1", 101, CWD)
+        self.running("t2", 102, CWD)
+        shown = self.shown("t1", "t2")
+        self.assertEqual(sorted(sum(shown.values(), [])), ["ka", "kb"])
+
+
+if __name__ == "__main__":
+    unittest.main()
