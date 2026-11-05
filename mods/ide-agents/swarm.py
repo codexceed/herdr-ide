@@ -5,8 +5,10 @@ argv[1]: JSON list of {"address", "kind": "claude"|"codex", "cwd"}.
 stdout:  JSON {address: [{id, name, detail, status, started, ended, depth}]}
          Only running or waiting subagents are listed: finished ones disappear.
 
+Folders: the agent's own process folder (`hc get`) first, then the ones passed in. The shell
+can start in one repo and the agent run in another, so the first folder with a session wins.
 Claude: the terminal's session comes from data/swarm/claude-<terminal>.json, written by
-claude_hook.py (SessionStart); else the newest transcript in the cwd's project folder.
+claude_hook.py (SessionStart); else the newest transcript in the first folder that has one.
 Each subagent has <session>/subagents/agent-<id>.meta.json + .jsonl. It runs while its log
 ends mid tool call (a long command writes nothing until it returns) or was written in the last
 STALE seconds; it waits while its parent's latest notification about it says it is waiting on
@@ -20,6 +22,7 @@ import mmap
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 import time
 
@@ -31,6 +34,21 @@ WAITING = b"is waiting on its own background work"
 now = time.time()
 
 
+def agent_cwd(address):
+    """Where the terminal's foreground program (the agent) runs, per `hc get`; None if unknown."""
+    try:
+        r = subprocess.run(["hc", "get", address, "--json"], capture_output=True, text=True, timeout=2)
+        return (json.loads(r.stdout).get("foreground") or {}).get("cwd") if r.returncode == 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError, AttributeError):
+        return None
+
+
+def folders(t):
+    """The terminal's candidate folders, most telling first, without repeats."""
+    given = t.get("cwds") or [t.get("cwd")]
+    return list(dict.fromkeys(c for c in [agent_cwd(t["address"]), t.get("cwd"), *given] if c))
+
+
 def claude_session(address, cwds):
     try:
         with open(os.path.join(APP, "data", "swarm", f"claude-{address}.json")) as f:
@@ -39,12 +57,14 @@ def claude_session(address, cwds):
             return path
     except (OSError, ValueError):
         pass
-    # Newest transcript among the candidate folders' projects.
-    sessions = []
+    # Newest transcript in the first folder that has one: newest across all of them would hand
+    # this terminal a busier session that only shares the folder its shell started in.
     for cwd in cwds:
         project = os.path.join(HOME, ".claude", "projects", re.sub(r"[^A-Za-z0-9-]", "-", cwd))
-        sessions += glob.glob(os.path.join(project, "*.jsonl"))
-    return max(sessions, key=os.path.getmtime) if sessions else None
+        sessions = glob.glob(os.path.join(project, "*.jsonl"))
+        if sessions:
+            return max(sessions, key=os.path.getmtime)
+    return None
 
 
 def last_turn(log):
@@ -156,10 +176,13 @@ def codex_children(db, thread, depth=0):
 
 def main():
     terminals = json.loads(sys.argv[1]) if len(sys.argv) > 1 else []
+    for t in terminals:
+        t["cwds"] = folders(t)
+        t["cwd"] = t["cwds"][0] if t["cwds"] else None
     result = {}
     for t in terminals:
         if t.get("kind") == "claude":
-            kids = claude_children(t["address"], t.get("cwds") or [c for c in [t.get("cwd")] if c])
+            kids = claude_children(t["address"], t["cwds"])
             if kids:
                 result[t["address"]] = kids
     codex = [t for t in terminals if t.get("kind") == "codex" and t.get("cwd")]
