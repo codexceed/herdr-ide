@@ -6,6 +6,9 @@
     "cmd-p": "mod.open:ide-open",
     "cmd-alt-p": "mod.open:picker"
   },
+  "terminal": {
+    "cmd-f": "terminal.search"
+  },
   "mod:ide-editor": {
     "cmd-w": "ide-editor.close"
   }

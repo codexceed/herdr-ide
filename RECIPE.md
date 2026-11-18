@@ -78,11 +78,13 @@ Left to right, the same frame as Herdr's `main` layout:
 - **Keys:** ⌘⇧V and ⌘\\ work while this layout shows (`layout:herdr-ide`); ⌘W closes a
   file tab while an editor pane has the keyboard (elsewhere it still closes the Herdr
   tab). Splits are Herdr's own: ⌘D right, ⌘⇧D down.
-- **Find:** ⌘F (`layout:herdr-ide`) turns the focused pane's header into a find bar over
-  that pane: query, `3 of 120`, ↑↓ (or the chevrons) to step, Enter copies the line,
-  Esc or × closes. Terminals search their screen plus 10,000 lines of history (`hc read`)
-  and show the current match's line in the bar; editor panes search the open file and
-  list every match under the breadcrumb. Matches are lines, newest first, any case.
+- **Find:** ⌘F in a terminal is Herdr's own find (`terminal.search`, bound in the
+  `terminal` section, which beats `layout:herdr-ide`): a bar inside the terminal that
+  searches its screen and history, highlights each hit and scrolls to it; Enter /
+  Shift-Enter or its arrows step. In an editor pane ⌘F (`layout:herdr-ide`) turns the
+  pane's header into a find bar over the open file: query, `3 of 12`, ↑↓ (or the
+  chevrons) to step, Enter copies the line, Esc or × closes, and every match is listed
+  under the breadcrumb. Matches are lines, newest first, any case.
 - **Go to file:** ⌘P (`layout:herdr-ide`; Herdr's own ⌘P tab picker moves to ⌥⌘P) searches
   the git repo holding the focused terminal's folder (tracked and untracked files, not
   ignored ones), else that folder (`rg --files` or `find`, at most 50,000 files), else the
@@ -144,9 +146,10 @@ Left to right, the same frame as Herdr's `main` layout:
   The focused pane's border is `foreground` (white), not `accent`, so it stays white
   whatever accent the find highlight uses.
 - `ide-pane`: the shipped `pane` header plus a find mode. `ide-pane.find` reaches every
-  header; the focused pane's opens. It keeps `shared("ide-find")` = `{[pane]: {query, at,
-  matches?}}`, one entry per open bar; for an editor pane `matches` carries each line cut
-  around the hit, which `ide-editor` draws as its list. Each load or close bumps a
+  header; the focused pane's acts. A terminal's runs `terminal.search` (Herdr's bar); an
+  editor's opens the header bar and keeps `shared("ide-find")` = `{[pane]: {query, at,
+  matches}}`, one entry per open bar; `matches` carries each line cut around the hit,
+  which `ide-editor` draws as its list. Each load or close bumps a
   generation, so a read that finishes late is dropped; an editor bar reloads when the
   editor's active file changes.
 - `ide-open` (`place: none`; `mod.json` overlay = popup at the top, 640×470): opened by
@@ -197,8 +200,11 @@ Left to right, the same frame as Herdr's `main` layout:
 - `flex_shrink(value)` needs a number (`flex_shrink_1()` doesn't); `herdr-app check` won't
   catch it in rows that only draw once the git answer arrives — look at the window.
 - Editor panes are read-only; tabs can't be dragged between panes.
-- Find can't jump: Herdr has no API to scroll a terminal or the code view, or to place a
+- Editor find can't jump: Herdr has no API to scroll a mod's code view or to place a
   popup over a pane, hence a bar in the pane's header and Enter copying the line.
+  Terminals jump because Herdr's own find (0.1.13+) does it.
+- A keys.json edited before Herdr 0.1.13 has no `terminal` ⌘F, so ⌘F falls through to
+  `layout:herdr-ide`; the installer adds it, and uninstall leaves it (it's Herdr's default).
 - Never cut a JS string inside a surrogate pair: half an emoji is invalid UTF-8 and the
   frame fails to draw ("Conversion from string failed").
 
