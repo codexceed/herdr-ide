@@ -24,6 +24,13 @@ function folder(cwd) {
   return cwd === h ? "~" : cwd.startsWith(h + "/") ? "~" + cwd.slice(h.length) : cwd;
 }
 
+// An agent that finished (done) or needs you (blocked) lights its header up in the status
+// color the sidebar's dots use: a tint and a 2px edge ({ edge, tint }, else null). Herdr's
+// pane frame has no per-status border, so the header is the part of the pane a mod can light.
+const GLOW = "2e"; // the tint: the color at 0x2e / 255 ≈ 18%
+const glow = (t, status) => (status === "done" || status === "blocked") && t[status]
+  ? { edge: t[status], tint: t[status].slice(0, 7) + GLOW } : null;
+
 // Lines holding the query (any case), newest first: [{ n, text, at, len }], at most SHOWN.
 const matches = (lines, query) => {
   const q = query.trim(), out = [];
@@ -223,15 +230,16 @@ export default class Pane extends View {
     const pic = icon(p.program, 14, t.dim);
     const st = p.status;
     const pane = p.pane;
+    const lit = glow(t, st);
     return h_flex()
       .id(`pane-head-${pane}`)
       .size_full()
       .px(10)
       .gap(8)
       .items_center()
-      .bg(t.background)
-      .border_b(1)
-      .border_color(t.border)
+      .bg(lit ? lit.tint : t.background)
+      .when(!lit, el => el.border_b(1).border_color(t.border))
+      .when(Boolean(lit), el => el.border_b(2).border_color(lit.edge))
       .text_size(12)
       .on_hover((hovered, cx) => { this.hovered = hovered; cx.notify(); })
       .on_click(() => run("pane.focus", { pane }))
