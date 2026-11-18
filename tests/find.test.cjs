@@ -6,7 +6,14 @@ const path = require('node:path');
 
 const source = fs.readFileSync(path.join(__dirname, '../mods/ide-pane/main.js'), 'utf8')
   .replace(/^import .*;\n/gm, '').replace('export default class Pane', 'class Pane');
-const { matches, snippet, SHOWN } = vm.runInNewContext(source + '\n({ matches, snippet, SHOWN });', { View: class {} });
+const { matches, snippet, SHOWN, glow } = vm.runInNewContext(source + '\n({ matches, snippet, SHOWN, glow });', { View: class {} });
+
+test('a finished agent lights its header blue, one that needs you red, others not at all', () => {
+  const t = { done: '#96b2d7', blocked: '#dc8c95', working: '#d8be87' };
+  assert.equal(JSON.stringify(glow(t, 'done')), '{"edge":"#96b2d7","tint":"#96b2d72e"}');
+  assert.equal(glow(t, 'blocked').edge, '#dc8c95');
+  for (const s of ['working', 'idle', null]) assert.equal(glow(t, s), null);
+});
 
 test('matches ignore case, take the query literally and list newest first', () => {
   const found = matches(['Alpha a.b', 'axb', 'ALPHA A.B two'], ' a.b ');
