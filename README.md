@@ -62,6 +62,8 @@ No network access. The mods run local programs and read outside their folder:
 | Find in a terminal or file | ⌘F: the pane's header turns into a find bar; ↑↓ steps through matching lines, Enter copies one, Esc closes. Editor panes also list every match |
 | Split terminals / agents | ⌘D (right), ⌘⇧D (down) |
 | Watch a swarm | Subagents appear under their agent while they run |
+| See which agent needs you | A pane's header lights up blue when its agent finishes and red when it asks you something |
+| Tell agents apart | Right-click an agent row: **Rename tab**, or pick a color for its border. The focused row lights up with a halo |
 
 See [RECIPE.md](RECIPE.md) for exactly what each part does and how it's built.
 

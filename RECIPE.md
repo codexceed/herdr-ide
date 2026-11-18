@@ -25,6 +25,16 @@ Left to right, the same frame as Herdr's `main` layout:
     plain group. Under each Claude Code / Codex agent,
     its running subagents as tree rows (26px, 12.5px text, `├`/`└` lines in the theme's
     `input` color): the subagent's task, how long it has run (`2m`), and a spinner.
+    Right-clicking an agent row opens its tab's menu: **Rename tab** (`tab.rename`, which
+    asks for the name; the row shows the tab's name) and nine colors plus none. Rows sit 4px apart (2px
+    margin each). Every row has a 1.5px border (2px when focused): white at 30%, or its tab's color at 50%. The focused row gets the border
+    at full strength, an opaque fill (the color at 14% over `chrome`, white at 9% for an
+    uncolored tab) and a halo: two rings of the color at 25% and 10%, drawn with a
+    negative margin so the rows around it don't move.
+    An agent on another machine gets a 42px row: its name, then the machine under it
+    (10.5px, `dim`, after the shipped `monitor` icon); both truncate.
+    Sub-agent rows take their parent tab's color: a 1.5px border and tree lines at the
+    parent's unfocused strength.
   - **Footer** (`ide-chrome` with `{footer: true}`): Settings, Add machine.
 - **Work area**: the shipped tab bar, then the active tab's panes as cards with the
   pane header (`ide-pane`: the shipped `pane` header plus find). Panes can be terminals,
@@ -104,6 +114,11 @@ Left to right, the same frame as Herdr's `main` layout:
   `TextView.markdown`, `image()`, `readTextFile`, `exec`. Mermaid: `sh -c` runs
   `mmdc -t dark|default -b transparent -s 2` into
   `~/.config/herdr-app/data/ide-mermaid/<hash>.png`, then `sips` for its size.
+- `ide-agents` tab colors: `shared("ide-agents.tab-colors")` = `{[tab]: "#rrggbb"}`,
+  written by the row menu (the mod opened as a popup with `props.tabMenu`), pruned of
+  closed tabs on each write. `SWATCHES` holds only colors that stand out on a dark
+  sidebar (≥ 3:1) and keep white and gray text readable on their tint;
+  `tests/agents.test.cjs` checks both.
 - `ide-agents`: the shipped `agents` mod plus `swarmKids()` / `swarmRow()`. Every 3 s it
   runs `python3 mods/ide-agents/swarm.py '<json>'` with each live Claude/Codex terminal's
   address, kind and folders (the pane's live `cwd` first, then core's).
@@ -123,6 +138,11 @@ Left to right, the same frame as Herdr's `main` layout:
   folder (its first terminal's live `cwd`), as the shipped `spaces` mod does; the branch
   from `git symbolic-ref --short -q HEAD`, else `git rev-parse --short HEAD`.
 - `ide-chrome`: the shipped `workspace-chrome` with `fitBrand()` resizing `brand`.
+- `ide-pane` status light: a header whose agent is `done` or `blocked` takes the theme's
+  status color (the sidebar dots' blue and red) as an 18% tint and a 2px bottom edge.
+  Herdr's pane frame has only `border` and `focus`, so the header is all a mod can light.
+  The focused pane's border is `foreground` (white), not `accent`, so it stays white
+  whatever accent the find highlight uses.
 - `ide-pane`: the shipped `pane` header plus a find mode. `ide-pane.find` reaches every
   header; the focused pane's opens. It keeps `shared("ide-find")` = `{[pane]: {query, at,
   matches?}}`, one entry per open bar; for an editor pane `matches` carries each line cut
