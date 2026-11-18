@@ -26,6 +26,10 @@ running (or has never run), it opens on the layout the next time it starts.
 
 Switch layouts any time with ctrl-shift-l (or Settings → Look).
 
+Releases are tags: every merge to `main` is tagged `vX.Y.Z` with notes on the
+[Releases](https://github.com/codexceed/herdr-ide/releases) page. Pin one with
+`git checkout v0.6.0` (or a submodule at that tag).
+
 ### Optional: exact Claude sessions
 
 Each Claude terminal is matched to its session through the record Claude Code keeps
@@ -72,6 +76,9 @@ See [RECIPE.md](RECIPE.md) for exactly what each part does and how it's built.
 
 `layouts/` and `mods/` are the installed files. Edit them here, rerun `install.py`, and
 check `herdr-app status`. Tests: `python3 -m unittest discover -s tests`.
+Versions: `release.py` picks the next tag from the commit subjects since the last one
+(`feat`, or `type!:`, bumps the minor; anything else the patch), and
+`.github/workflows/release.yml` tags and publishes it, so write conventional commit titles.
 `preview.png` is rendered from `preview.html` (a mock-up, no real data):
 
 ```sh
