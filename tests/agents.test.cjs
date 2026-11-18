@@ -19,7 +19,7 @@ function load() {
     closeOverlay: id => state.closed.push(id), openOverlay: o => state.calls.push({ overlay: o }),
     spaces: () => [{ tabs: [{ id: 'tab-a' }, { id: 'tab-b' }] }], theme: () => ({}),
   };
-  const mod = vm.runInNewContext(source + '\n({ Agents, SWATCHES, TINT, withColor, mix });', sandbox);
+  const mod = vm.runInNewContext(source + '\n({ Agents, SWATCHES, TINT, withColor, mix, byTab });', sandbox);
   return { state, ...mod };
 }
 
@@ -83,4 +83,10 @@ test('a sub-agent row wears its parent tab\'s color at half strength, else soft 
   rows.kin(el, SWATCHES[0].hex);
   rows.kin(el);
   assert.deepEqual(seen.filter(([k]) => k === 'border_color').map(([, c]) => c), [SWATCHES[0].hex + '80', '#ffffff4d']);
+});
+
+test('agents sharing one screen group into runs; a tab seen again later starts a new run', () => {
+  const { byTab } = load();
+  const runs = byTab([{ tab: 'a' }, { tab: 'a' }, { tab: 'a' }, { tab: 'b' }, { tab: null }, { tab: null }, { tab: 'a' }]);
+  assert.equal(JSON.stringify(runs.map(r => r.length)), '[3,1,1,1,1]');
 });

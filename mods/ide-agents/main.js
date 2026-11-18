@@ -91,6 +91,19 @@ export function mix(a, b, t) {
 }
 
 // The colors map with `tab` set to `hex` (null clears it), keeping only live tabs and swatch colors.
+// Agents that share one screen: runs of neighbours in the same tab (agents() lists them in
+// space, tab, pane order). A run of two or more is drawn inside one dashed box.
+export function byTab(members) {
+  const runs = [];
+  for (const a of members) {
+    if (runs.length && a.tab && runs.at(-1)[0].tab === a.tab) runs.at(-1).push(a);
+    else runs.push([a]);
+  }
+  return runs;
+}
+// The list's right padding: the scrollbar is drawn over the content, so rows end before it.
+const SCROLLBAR = 18;
+
 export function withColor(colors, tab, hex, live) {
   const next = Object.fromEntries(Object.entries(colors ?? {}).filter(([id, c]) => live.has(id) && SWATCHES.some(s => s.hex === c)));
   if (hex) next[tab] = hex; else delete next[tab];
@@ -678,10 +691,27 @@ export default class Agents extends View {
           .when(!byPriority && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true)))
           .child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim)));
     };
+    // Agents in one tab (a split view): a dashed box in the tab's color around their rows, headed
+    // by a split-panes icon and how many share the screen. Sub-agents keep their tree lines.
+    const tabBox = (run) => v_flex()
+      .id(`tab-box-${run[0].tab}`)
+      .flex_none()
+      .my(GAP)
+      .px(5)
+      .pb(3)
+      .rounded(12)
+      .border(1)
+      .border_dashed()
+      .border_color(quiet(colorOf(run[0])))
+      .child(h_flex().h(20).px(3).gap(5).items_center().text_size(10.5).text_color(t.dim)
+        .child(svg("mods/workspace-chrome/panel-right.svg").size(11).flex_none())
+        .child(div().child(`${run.length} panes, one view`)))
+      .children(run.flatMap(withKids));
+    const boxed = (members) => byTab(members).flatMap(run => run.length > 1 ? [tabBox(run)] : run.flatMap(withKids));
     const rows = collapsed
       ? list.flatMap(withKids)
       : shownGroups.filter((g) => !(g.sub && this.folded.has(g.under)))
-          .flatMap((g) => [header(g), ...(this.folded.has(g.id) ? [] : g.members.flatMap(withKids)
+          .flatMap((g) => [header(g), ...(this.folded.has(g.id) ? [] : boxed(g.members)
             .map((r) => (g.sub ? h_flex().w_full().flex_none().pl(14).child(r.flex_1().min_w(0)) : r)))]);
 
     return v_flex()
@@ -717,7 +747,7 @@ export default class Agents extends View {
       .when(list.length === 0 && !collapsed, (el) =>
         el.child(div().px(12).text_size(12).text_color(t.dim).child("No agent status yet. Agents show up here when they report their status. Older versions and agents inside tmux may not.")),
       )
-      .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar().mode("always").children(rows));
+      .child(v_flex().id("ag-list").flex_1().min_h(0).pl(collapsed ? 0 : 8).pr(collapsed ? 0 : SCROLLBAR).overflow_y_scrollbar().mode("always").children(rows));
       // ide-agents: no » here; the sidebar toggle stays at the top (ide-chrome).
   }
 }
