@@ -3,6 +3,8 @@ name: Release
 # Each merge to main is a release: release.py works out vX.Y.Z from the commits since the
 # last tag (dev-tools' rules), then this tags it and publishes its notes as a GitHub release.
 # Tags only: main is protected, so a bot can't push a version or changelog commit to it.
+# The release and its tag are made in one API call, so a failed run leaves no tag behind and
+# a rerun works out the same version again.
 on:
   push:
     branches: [main]
@@ -24,17 +26,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false # gh publishes with GH_TOKEN; nothing is pushed with git
       - name: Work out the next version
         id: next
-        run: echo "version=$(python3 release.py --notes "$RUNNER_TEMP/notes.md")" >> "$GITHUB_OUTPUT"
+        # A plain assignment, so a failing release.py fails the step (inside echo it wouldn't).
+        run: |
+          version=$(python3 release.py --notes "$RUNNER_TEMP/notes.md")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Tag and publish
         if: steps.next.outputs.version != ''
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: v${{ steps.next.outputs.version }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "$TAG"
-          gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
+        run: gh release create "$TAG" --target "$(git rev-parse HEAD)" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
