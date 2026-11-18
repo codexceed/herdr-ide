@@ -1,0 +1,40 @@
+name: Release
+
+# Each merge to main is a release: release.py works out vX.Y.Z from the commits since the
+# last tag (dev-tools' rules), then this tags it and publishes its notes as a GitHub release.
+# Tags only: main is protected, so a bot can't push a version or changelog commit to it.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Work out the next version
+        id: next
+        run: echo "version=$(python3 release.py --notes "$RUNNER_TEMP/notes.md")" >> "$GITHUB_OUTPUT"
+      - name: Tag and publish
+        if: steps.next.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.next.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
