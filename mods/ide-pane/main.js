@@ -1,16 +1,17 @@
-// A pane's header: the shipped `pane` header plus find (cmd-f), so the find bar sits on the
-// pane it searches. Herdr has no find of its own, can't place a popup over a pane and can't
-// scroll a terminal, so the bar steps through matching lines and Enter copies one:
-// - terminal: its screen and history from herdr-core (`hc read`); the bar shows the line;
-// - editor pane (mods/ide-editor): the open file; the editor lists every match below.
-// State: shared("ide-find") = { [pane]: { query, at, matches? } } for each open bar; matches
-// ([{ n, parts: [before, hit, after] }]) only for editor panes, which draw the list.
+// A pane's header: the shipped `pane` header plus find (cmd-f).
+// - terminal: Herdr's own find bar (`terminal.search`): it highlights each hit in the screen
+//   and history and scrolls to it. keys.json binds cmd-f to it in terminals directly; this
+//   path covers the palette and anyone who kept cmd-f on ide-pane.find.
+// - editor pane (mods/ide-editor): the header turns into a find bar over the open file and
+//   steps through matching lines; Enter copies one; the editor lists every match below.
+// State: shared("ide-find") = { [pane]: { query, at, matches } } for each open editor bar;
+// matches are [{ n, parts: [before, hit, after] }], drawn by the editor.
 // Props from the app: { pane, terminal }.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, InputState, Input } from "gpui-base";
-import { panes, props, run, theme, home, hc, readTextFile, shared, setShared, nextCommand, notify } from "herdr";
+import { panes, props, run, theme, home, readTextFile, shared, setShared, nextCommand, notify } from "herdr";
 
-const FIND = "ide-find", HISTORY = 10000, SHOWN = 300, BEFORE = 40;
+const FIND = "ide-find", SHOWN = 300, BEFORE = 40;
 const keyOf = t => `${t.on ?? ""}:${t.path}`;
 
 function icon(p, size, color) {
@@ -56,7 +57,7 @@ export default class Pane extends View {
     this.hovered = false;
     this.finding = false;
     this.lines = null;
-    this.source = null; // what this.lines came from: the terminal, or the editor file's key
+    this.source = null; // the key of the editor file this.lines came from
     this.gen = 0; // bumped by every load and close; a read that finishes later is dropped
     this.input = InputState.new({ placeholder: "Find" });
     this.input.on("change", (_e, cx) => { this.update({ query: this.input.value(), at: 0 }); cx.notify(); });
@@ -99,37 +100,31 @@ export default class Pane extends View {
 
   update(change) {
     const next = { ...this.state(), ...change };
-    if (this.me()?.mod) next.matches = matches(this.lines ?? [], next.query).map(m => ({ n: m.n, parts: snippet(m) }));
+    next.matches = matches(this.lines ?? [], next.query).map(m => ({ n: m.n, parts: snippet(m) }));
     this.save(next);
   }
 
   open(cx) {
+    // The command only reaches a focused header, so the focused terminal is this pane's.
+    if (this.me()?.terminal) { run("terminal.search"); return; }
     this.finding = true;
     this.input.set_value(""); this.update({ query: "", at: 0 });
     this.input.focus();
     this.load(cx);
   }
 
-  // (Re)reads what the pane shows: the terminal's history, or the editor's open file.
+  // (Re)reads the editor's open file.
   load(cx) {
-    const p = this.me(), tab = p?.mod ? this.file() : null, gen = ++this.gen;
-    this.lines = null; this.error = null; this.source = tab ? keyOf(tab) : p?.terminal ?? null;
+    const tab = this.file(), gen = ++this.gen;
+    this.lines = null; this.error = null; this.source = tab ? keyOf(tab) : null;
     this.update({ at: 0 });
-    if (!p?.terminal && !tab) { this.error = "Nothing to search here"; return; }
+    if (!tab) { this.error = "Nothing to search here"; return; }
     cx.spawn(async cx => {
       try {
-        let lines;
-        if (p.terminal) {
-          const r = await hc(["read", p.terminal, "--lines", String(HISTORY)]);
-          if (r.code !== 0) throw new Error(r.stderr.trim() || "hc read failed");
-          lines = r.stdout.split("\n");
-        } else {
-          const text = await readTextFile(tab.path, { on: tab.on });
-          if (text === null) throw new Error("This file is no longer available");
-          lines = text.split("\n");
-        }
+        const text = await readTextFile(tab.path, { on: tab.on });
+        if (text === null) throw new Error("This file is no longer available");
         if (gen !== this.gen) return;
-        this.lines = lines;
+        this.lines = text.split("\n");
         this.update({});
       } catch (e) { if (gen === this.gen) this.error = String(e.message ?? e); }
       finally { cx.notify(); }
@@ -179,10 +174,9 @@ export default class Pane extends View {
   }
 
   findBar(t, p) {
-    const found = this.found(), at = this.state().at, m = found[at], q = this.state().query.trim();
+    const found = this.found(), at = this.state().at, q = this.state().query.trim();
     const count = this.error ?? (this.lines === null ? "Reading…" : !q ? `${this.lines.length.toLocaleString()} lines`
       : found.length ? `${at + 1} of ${found.length === SHOWN ? `${SHOWN}+` : found.length}` : "No matches");
-    const [before, hit, after] = m && p.terminal ? snippet(m) : [];
     return h_flex()
       .id(`pane-find-${p.pane}`)
       .size_full()
@@ -207,12 +201,7 @@ export default class Pane extends View {
       .child(div().flex_none().text_color(this.error ? t.ansi1 : t.dim).child(count))
       .child(this.findButton(t, `pf-up-${p.pane}`, "chevron-up", () => this.step(-1)))
       .child(this.findButton(t, `pf-down-${p.pane}`, "chevron-down", () => this.step(1)))
-      .child(h_flex().flex_1().min_w(0).overflow_hidden().whitespace_nowrap().text_color(t.muted)
-        .when(Boolean(hit), el => el
-          .child(div().flex_none().text_color(t.dim).child(`${m.n}`)).child(div().w(8).flex_none())
-          .child(div().flex_none().child(before))
-          .child(div().flex_none().rounded(3).bg(t.accent).text_color(t.accent_foreground).child(hit))
-          .child(div().flex_1().min_w(0).truncate().child(after))))
+      .child(div().flex_1())
       .child(this.findButton(t, `pf-x-${p.pane}`, "close", () => this.close()));
   }
 
@@ -220,7 +209,7 @@ export default class Pane extends View {
     const t = theme();
     const p = this.me();
     if (!p) return div();
-    if (this.finding && p.mod) {
+    if (this.finding) {
       // The editor switched files under an open bar: search the file it shows now.
       const tab = this.file();
       if ((tab ? keyOf(tab) : null) !== this.source) this.load(cx);

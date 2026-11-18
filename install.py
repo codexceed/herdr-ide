@@ -26,6 +26,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 LAYOUT = "herdr-ide"
 PREVIEW = "preview.png"
 SKIP = {"__pycache__", ".DS_Store", "gpui-kit.d.ts", "jsconfig.json"}
+# Bindings in our keys.json that Herdr itself ships: install restores them for a keys.json
+# edited before Herdr had them; uninstall leaves them, so Herdr keeps working as shipped.
+HERDR_DEFAULTS = {("terminal", "cmd-f", "terminal.search")}
 
 
 def say(msg):
@@ -133,6 +136,8 @@ def remove_keys(home):
     removed = 0
     for section, keys in ours.items():
         for key, action in keys.items():
+            if (section, key, action) in HERDR_DEFAULTS:
+                continue
             if theirs.get(section, {}).get(key) == action:
                 del theirs[section][key]
                 removed += 1

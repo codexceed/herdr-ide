@@ -42,6 +42,7 @@ function headers() {
     { pane: 'term-a', terminal: 't1', tab: 'tab', focused: true },
     { pane: 'term-b', terminal: 't2', tab: 'tab', focused: false },
     { pane: 'ed', terminal: null, mod: 'ide-editor', tab: 'tab', focused: false },
+    { pane: 'ed2', terminal: null, mod: 'ide-editor', tab: 'tab', focused: false },
   ];
   const element = new Proxy({}, { get: () => () => element });
   const read = what => new Promise(resolve => state.reads.push({ what, resolve }));
@@ -51,7 +52,6 @@ function headers() {
     panes: () => state.panes, props: () => ({ pane: state.pane }), run: (command, args) => state.calls.push({ command, args }),
     theme: () => ({}), home: () => '/home/test', notify() {}, nextCommand: () => new Promise(() => {}),
     shared: key => state.shared[key], setShared: (key, value) => { state.shared[key] = value; },
-    hc: args => read(args[1]).then(stdout => ({ code: 0, stdout, stderr: '' })),
     readTextFile: p => read(p),
   };
   const Pane = vm.runInNewContext(source + '\nPane;', sandbox);
@@ -60,23 +60,35 @@ function headers() {
   const as = (pane, fn) => { state.pane = pane; return fn(); };
   const settle = () => new Promise(r => setImmediate(r));
   const type = (h, pane, q) => as(pane, () => { h.input.v = q; h.input.fire('change', cx); });
-  const editor = active => {
-    state.shared['ide-editor.groups'] = { g: { open: true, pane: 'ed', tab: 'tab', active: `:${active}`, tabs: [{ path: '/a.md', on: null }, { path: '/b.md', on: null }] } };
+  const group = (pane, active) => ({ open: true, pane, tab: 'tab', active: `:${active}`, tabs: [{ path: '/a.md', on: null }, { path: '/b.md', on: null }] });
+  const editor = (active, other = '/b.md') => {
+    state.shared['ide-editor.groups'] = { g: group('ed', active), g2: group('ed2', other) };
   };
   return { state, cx, header, as, settle, type, editor };
 }
 
+test('find in a terminal opens Herdr\'s own find bar, which jumps to each hit', () => {
+  const { state, cx, header, as } = headers();
+  const a = header('term-a');
+  as('term-a', () => a.open(cx));
+  assert.equal(JSON.stringify(state.calls), '[{"command":"terminal.search"}]');
+  assert.equal(a.finding, false);
+  assert.equal(state.reads.length, 0);
+  assert.equal(state.shared['ide-find'], undefined);
+});
+
 test('a search in one pane survives opening find in another', async () => {
-  const { state, cx, header, as, settle, type } = headers();
-  const a = header('term-a'), b = header('term-b');
-  as('term-a', () => a.open(cx)); state.reads.shift().resolve('one herdr\ntwo'); await settle();
-  type(a, 'term-a', 'herdr');
-  as('term-b', () => b.open(cx)); state.reads.shift().resolve('other'); await settle();
-  type(b, 'term-b', 'zzz');
-  assert.equal(as('term-a', () => a.found().length), 1);
-  as('term-a', () => a.copy(cx));
+  const { state, cx, header, as, settle, type, editor } = headers();
+  editor('/a.md', '/b.md');
+  const a = header('ed'), b = header('ed2');
+  as('ed', () => a.open(cx)); state.reads.shift().resolve('one herdr\ntwo'); await settle();
+  type(a, 'ed', 'herdr');
+  as('ed2', () => b.open(cx)); state.reads.shift().resolve('other'); await settle();
+  type(b, 'ed2', 'zzz');
+  assert.equal(as('ed', () => a.found().length), 1);
+  as('ed', () => a.copy(cx));
   assert.equal(state.clip, 'one herdr');
-  assert.equal(state.shared['ide-find']['term-b'].query, 'zzz');
+  assert.equal(state.shared['ide-find'].ed2.query, 'zzz');
 });
 
 test('an editor bar searches the file the editor shows now', async () => {
@@ -105,11 +117,12 @@ test('a read that finishes after a newer search is dropped', async () => {
 });
 
 test('a closed bar\'s read does not bring its search back', async () => {
-  const { state, cx, header, as, settle } = headers();
-  const a = header('term-a');
-  as('term-a', () => a.open(cx)); const pending = state.reads.shift();
-  as('term-a', () => a.close());
+  const { state, cx, header, as, settle, editor } = headers();
+  editor('/a.md');
+  const a = header('ed');
+  as('ed', () => a.open(cx)); const pending = state.reads.shift();
+  as('ed', () => a.close());
   pending.resolve('late'); await settle();
-  assert.equal(state.shared['ide-find']?.['term-a'], undefined);
+  assert.equal(state.shared['ide-find']?.ed, undefined);
   assert.equal(a.lines, null);
 });

@@ -116,7 +116,16 @@ class InstallTest(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.home, "layouts", "herdr-ide.json")))
         for mod in install.mods():
             self.assertFalse(os.path.exists(os.path.join(self.home, "mods", mod)))
-        self.assertEqual(self.keys(), {"global": {"cmd-t": "tab.new"}})
+        self.assertEqual(self.keys(), {"global": {"cmd-t": "tab.new"}, "terminal": {"cmd-f": "terminal.search"}})
+
+    def test_terminal_find_is_restored_and_survives_uninstall(self):
+        # A keys.json edited before Herdr shipped terminal find never got cmd-f; ours adds it.
+        with open(os.path.join(self.home, "keys.json"), "w") as f:
+            json.dump({"terminal": {"cmd-c": "terminal.copy"}}, f)
+        run(self.home)
+        self.assertEqual(self.keys()["terminal"], {"cmd-c": "terminal.copy", "cmd-f": "terminal.search"})
+        run(self.home, "--uninstall")
+        self.assertEqual(self.keys(), {"terminal": {"cmd-c": "terminal.copy", "cmd-f": "terminal.search"}})
 
 
 if __name__ == "__main__":
