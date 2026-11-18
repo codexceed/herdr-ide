@@ -35,6 +35,9 @@ Left to right, the same frame as Herdr's `main` layout:
     (10.5px, `dim`, after the shipped `monitor` icon); both truncate.
     Sub-agent rows take their parent tab's color: a 1.5px border and tree lines at the
     parent's unfocused strength.
+    Agents that share one screen (neighbours in the same tab, `byTab()`) sit in a dashed
+    box in the tab's color, headed by a split-panes icon and "N panes, one view"; the
+    list keeps an 18px right gutter so the scrollbar, drawn over the content, misses the rows.
   - **Footer** (`ide-chrome` with `{footer: true}`): Settings, Add machine.
 - **Work area**: the shipped tab bar, then the active tab's panes as cards with the
   pane header (`ide-pane`: the shipped `pane` header plus find). Panes can be terminals,
