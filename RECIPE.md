@@ -2,7 +2,7 @@
 
 Herdr's default window turned into a small IDE for running agent swarms. Files open as
 tabs in editor panes that sit in the same split grid as terminals and agents, markdown
-renders with mermaid diagrams (⌘⇧V, as in VSCode), and the agents sidebar shows each
+renders with mermaid diagrams and HTML renders as a page (⌘⇧V, as in VSCode), and the agents sidebar shows each
 Claude Code or Codex session's running subagents as a live tree under it.
 
 ![herdr-ide](preview.png)
@@ -48,12 +48,12 @@ Left to right, the same frame as Herdr's `main` layout:
   pane header (`ide-pane`: the shipped `pane` header plus find). Panes can be terminals,
   agents or **editor panes** (`ide-editor`):
   - a 34px tab strip in `chrome` (active tab on `background` with a 1px `accent` top edge,
-    a × on each tab), and on the right a preview/source toggle (markdown files only) and a
+    a × on each tab), and on the right a preview/source toggle (markdown and HTML files only) and a
     split button;
   - a 24px breadcrumb with the file's path (`~/…`);
   - the file as a read-only code view with line numbers and syntax colors, or rendered
     markdown (24px side padding, 14px text in the system UI font) with diagrams as centered
-    images.
+    images, or an HTML file as a picture of the page at the pane's full width.
 - **Files panel** on the right (`ide-files`, hidden until the tab bar's Files button):
   the focused pane's folder as a lazy tree with git marks (A / M / D / U).
 - **Go to file** (`ide-open`, ⌘P): a 640px popup hanging 40px from the top, like VS Code's
@@ -83,6 +83,13 @@ Left to right, the same frame as Herdr's `main` layout:
   front matter. Each ```` ```mermaid ```` block renders once (≈1–2 s, "Rendering
   diagram…" meanwhile) in the theme's light or dark look, then comes from a cache; a
   broken diagram shows mermaid's error and its source.
+- **HTML:** ⌘⇧V on a `.html` / `.htm` / `.xhtml` file shows the page as Chrome lays it out
+  at the pane's width, in the theme's light or dark `prefers-color-scheme`, after its
+  scripts run (≈2 s, "Rendering page…" meanwhile). It is a picture: hover, clicks and
+  `<details>` don't respond. Resizing the pane re-renders per 20px of width, showing the
+  last render scaled meanwhile; editing the file re-renders on the next 3 s reload. A file
+  on another machine is copied here first, so its relative links (CSS, images) don't load;
+  a local file's do. Pages taller than 12,000px are cut, with a note.
 - **Keys:** ⌘⇧V and ⌘\\ work while this layout shows (`layout:herdr-ide`); ⌘W closes a
   file tab while an editor pane has the keyboard (elsewhere it still closes the Herdr
   tab). Splits are Herdr's own: ⌘D right, ⌘⇧D down.
@@ -121,9 +128,15 @@ Left to right, the same frame as Herdr's `main` layout:
   tab, open, used, pane}`; `props().seed` fills a brand-new group. Commands from
   `nextCommand()`: `markdown`, `split`, `close` (acted on only by the group in
   `shared("ide-editor.active")`), `focus`. Uses `EditorState`/`Editor`,
-  `TextView.markdown`, `image()`, `readTextFile`, `exec`. Mermaid: `sh -c` runs
+  `TextView.markdown`, `image()`, `readTextFile`, `writeTextFile`, `exec`. Mermaid: `sh -c` runs
   `mmdc -t dark|default -b transparent -s 2` into
   `~/.config/herdr-app/data/ide-mermaid/<hash>.png`, then `sips` for its size.
+  HTML: `sh -c` finds mermaid-cli's folder from `mmdc`, sets `NODE_PATH` to its
+  `node_modules`, and runs `node mods/ide-editor/html_shot.cjs <page> <png> <width>
+  dark|light` (puppeteer `headless: "shell"`, 2× scale, `networkidle0` up to 5 s, full-page
+  clip) into `data/ide-html/<hash>.png`, keyed by look, width step, file and text; it
+  prints the CSS size. A remote file is first written to `data/ide-html/<hash>.html`.
+  One render runs per group at a time; `shown` keeps each tab's last finished page.
 - `ide-agents` colors: the herdr-core terminal label `herdr-ide.color=#rrggbb`, written by the
   row menu (the mod opened as a popup with `props.tabMenu`) with `hc label` and read from
   `terminals()[i].labels`. Like Herdr's pins (`herdr.pinned`) it follows the session across
@@ -211,6 +224,10 @@ Left to right, the same frame as Herdr's `main` layout:
   tool or waiting for 6 hours, like a Codex thread open that long without a finished turn,
   counts as orphaned.
 - Diagram sizing uses `sips`, so mermaid previews are macOS-only as built.
+- Mods have no web view and `TextView.html` drops CSS and SVG, so an HTML preview is a
+  headless-Chrome screenshot: no interaction. The page starts in a 100px-tall viewport so
+  its height is its content's; a page sized in `vh` lays out short.
+- `data/ide-html/` and `data/ide-mermaid/` are never pruned: each edit or width step adds a PNG.
 - Without the Claude hook, two Claude terminals in the same folder show the same
   session's subagents.
 - `flex_shrink(value)` needs a number (`flex_shrink_1()` doesn't); `herdr-app check` won't
@@ -232,6 +249,8 @@ Left to right, the same frame as Herdr's `main` layout:
   pane to its right showing the same file.
 - A markdown file with a ```` ```mermaid ```` block shows the diagram after ⌘⇧V, and
   ⌘⇧V again shows the source.
+- An HTML file with a `<style>`, an inline `<svg>` and a `<script>` that writes text shows
+  all three after ⌘⇧V, in the theme's look, both for a local file and one on a machine.
 - Asking Claude Code to run three background subagents shows three spinner rows under
   that agent within 3 s, and each row disappears when its subagent finishes.
 - Folding the sidebar keeps its toggle at the top, with nothing at the bottom of the
