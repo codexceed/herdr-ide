@@ -135,7 +135,7 @@ test('mermaid errors keep the parse message and drop the stack trace', () => {
 
 
 function htmlGroup() {
-  const execs = [], writes = [];
+  const execs = [], writes = [], notes = [];
   let reply = { code: 0, stdout: '700 477\n', stderr: '' };
   const state = { groups: { a: { tabs: [], preview: [], pane: 'pane-a', tab: 'tab' } }, active: 'a' };
   const element = new Proxy({}, { get: () => () => element });
@@ -147,7 +147,9 @@ function htmlGroup() {
     focused: () => ({ pane: 'pane-a', tab: 'tab' }), panes: () => [{ pane: 'pane-a', mod: 'ide-editor', tab: 'tab' }],
     run() {}, theme: () => ({}), settings: () => ({ dark: true }), home: () => '/h', appHome: () => '/app',
     exec: async (cmd, args) => { execs.push([cmd, ...args]); return cmd === 'sh' ? reply : { code: 0, stdout: '', stderr: '' }; },
-    writeTextFile: async p => { writes.push(p); return null; },
+    writeTextFile: async (p, text) => { writes.push(p); if (state.disk && p in state.disk) throw new Error('exists'); if (state.full) throw new Error('No space left on device'); return null; },
+    readTextFile: async p => state.disk?.[p] ?? null,
+    notify: n => { notes.push(n); return 'n'; },
   };
   const source = fs.readFileSync(path.join(__dirname, '../mods/ide-editor/main.js'), 'utf8')
     .replace(/^import .*;\n/gm, '').replace('export default class EditorGroup', 'class EditorGroup');
@@ -157,7 +159,7 @@ function htmlGroup() {
   const cx = { focus_handle: () => ({ focus() {}, is_focused: () => false }), spawn: fn => { pending.push(fn(cx)); }, timer: { every() {} }, notify() {} };
   g.init({}, { ...cx, spawn() {} }); // init's command loop isn't under test
   const settle = async () => { while (pending.length) { const p = pending; pending = []; await Promise.all(p); } };
-  return { g, cx, state, execs, writes, settle, reply: r => { reply = r; } };
+  return { g, cx, state, execs, writes, notes, settle, reply: r => { reply = r; } };
 }
 
 test('cmd-shift-v toggles the preview for HTML files as for markdown, and not for others', () => {
@@ -213,4 +215,58 @@ test('a failed render shows Chrome\'s error', async () => {
   g.width = 700; g.htmlPage(tab, 'x', cx); await settle();
   const p = g.htmlPage(tab, 'x', cx);
   assert.equal(p.state, 'error'); assert.match(p.error, /mermaid-cli/);
+});
+
+test('Open in browser opens a local HTML file where it is, with the default browser', async () => {
+  const { g, cx, execs, writes, notes, settle } = htmlGroup(), tab = { path: '/x/report#1.html', on: null };
+  g.openInBrowser(tab, cx); await settle();
+  const open = execs.find(e => e[0] === 'sh');
+  assert.match(open[2], /open -b .*com\.apple\.Safari/); assert.match(open[2], /xdg-open/);
+  assert.equal(open.at(-1), '/x/report#1.html');
+  assert.equal(writes.length, 0); assert.equal(notes.length, 0);
+});
+
+test('Open in browser copies a remote file first, and waits until it has been read', async () => {
+  const { g, cx, execs, writes, settle } = htmlGroup(), tab = { path: '/home/s/curve.html', on: 'devbox' };
+  g.openInBrowser(tab, cx); await settle();
+  assert.equal(execs.length, 0, 'nothing read yet: nothing to open');
+  g.docs.set('devbox:/home/s/curve.html', { text: '<p>remote' });
+  g.openInBrowser(tab, cx); await settle();
+  assert.equal(writes.length, 1); assert.match(writes[0], /^\/app\/data\/ide-html\/\w+\.html$/);
+  assert.equal(execs.find(e => e[0] === 'sh').at(-1), writes[0]);
+});
+
+test('a failed Open in browser posts an error notification', async () => {
+  const { g, cx, notes, settle, reply } = htmlGroup();
+  reply({ code: 1, stdout: '', stderr: 'LSOpenURLsWithRole() failed\n' });
+  g.openInBrowser({ path: '/x/c.html', on: null }, cx); await settle();
+  assert.equal(notes.length, 1); assert.equal(notes[0].level, 'error'); assert.match(notes[0].body, /LSOpen/);
+});
+
+test('a remote copy that already holds the text is reused; a failed copy is reported, not opened', async () => {
+  const { g, cx, state, execs, notes, settle } = htmlGroup(), tab = { path: '/home/s/curve.html', on: 'devbox' };
+  g.docs.set('devbox:/home/s/curve.html', { text: '<p>remote' });
+  state.disk = {};
+  g.openInBrowser(tab, cx); await settle();
+  const copy = execs.find(e => e[0] === 'sh').at(-1);
+  state.disk[copy] = '<p>remote'; execs.length = 0;
+  g.openInBrowser(tab, cx); await settle();
+  assert.equal(execs.filter(e => e[0] === 'sh').length, 1, 'existing complete copy: opened');
+  state.disk[copy] = '<p>rem'; execs.length = 0;
+  g.openInBrowser(tab, cx); await settle();
+  assert.equal(execs.filter(e => e[0] === 'sh').length, 0, 'partial copy: not opened');
+  assert.equal(notes.at(-1).level, 'error');
+  state.disk = {}; state.full = true;
+  g.openInBrowser(tab, cx); await settle();
+  assert.equal(execs.filter(e => e[0] === 'sh').length, 0);
+  assert.match(notes.at(-1).body, /No space/);
+});
+
+test('a failed remote copy shows as a preview error too', async () => {
+  const { g, cx, state, execs, settle } = htmlGroup(), tab = { path: '/home/s/c.html', on: 'devbox' };
+  state.full = true; g.width = 700;
+  g.htmlPage(tab, '<p>x', cx); await settle();
+  assert.equal(execs.filter(e => e[0] === 'sh').length, 0, 'Chrome not started');
+  const p = g.htmlPage(tab, '<p>x', cx);
+  assert.equal(p.state, 'error'); assert.match(p.error, /No space/);
 });

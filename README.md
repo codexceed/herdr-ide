@@ -49,7 +49,8 @@ The mods run local programs and read outside their folder:
 
 - `ide-editor` reads the files you open and runs `mmdc` + `sips` to render diagrams into
   `~/.config/herdr-app/data/ide-mermaid/`, and `node` + headless Chrome (mermaid-cli's
-  puppeteer) to render HTML previews into `~/.config/herdr-app/data/ide-html/`.
+  puppeteer) to render HTML previews into `~/.config/herdr-app/data/ide-html/`; **Open in
+  browser** runs `open -b <your default browser>` (`xdg-open` on Linux).
 - `ide-files` runs `sh` to list folders and `git status` for change marks.
 - `ide-open` runs `git ls-files` (outside a repo `rg --files` or `find`), `hc read` on the
   tab's terminals, and `sh` to check which printed paths exist.
@@ -65,6 +66,7 @@ The mods run local programs and read outside their folder:
 | Files side by side | ⌘\\ or the split button in an editor pane |
 | Close a file tab | × , middle-click, or ⌘W in the editor pane |
 | Markdown or HTML preview ⇄ source | ⌘⇧V or the `</>` button |
+| Use an HTML page interactively | The ↗ button (HTML files): opens it in your default browser |
 | Find in a terminal | ⌘F: Herdr's find bar searches the screen and history, highlights each hit and scrolls to it; Enter / Shift-Enter or its arrows step |
 | Find in a file | ⌘F in an editor pane: the header turns into a find bar listing every match; ↑↓ steps, Enter copies the line, Esc closes |
 | Split terminals / agents | ⌘D (right), ⌘⇧D (down) |

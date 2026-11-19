@@ -9,7 +9,7 @@
 // Find (cmd-f) lives in the pane header (mods/ide-pane); this pane lists its matches.
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, TextView } from "gpui-base";
-import { props, shared, setShared, focused, panes, run, exec, readTextFile, writeTextFile, theme, settings, appHome, home, nextCommand } from "herdr";
+import { props, shared, setShared, focused, panes, run, exec, readTextFile, writeTextFile, notify, theme, settings, appHome, home, nextCommand } from "herdr";
 
 const KEY = "ide-editor.groups", ACTIVE = "ide-editor.active", MOD = "ide-editor", FIND = "ide-find";
 const LANG = { ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js", toml: "yaml", jsonc: "json", svelte: "html", vue: "html" };
@@ -59,6 +59,15 @@ const SHOT = `m=$(command -v mmdc) || { echo "HTML preview needs @mermaid-js/mer
 pkg=$(dirname "$(dirname "$(readlink -f "$m")")")
 NODE_PATH="$pkg/node_modules:$(dirname "$(dirname "$pkg")")" exec node "$@"`;
 const pages = new Map(); // hash -> { state, path, w, h, cut, error }
+// The default browser, not whatever app owns .html (often an editor): on macOS the https handler.
+const BROWSER = `if [ "$(uname)" = Darwin ]; then
+  b=$(python3 -c 'import os, plistlib
+p = os.path.expanduser("~/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist")
+try: h = plistlib.load(open(p, "rb")).get("LSHandlers", [])
+except Exception: h = []
+print(next((x.get("LSHandlerRoleAll", "") for x in h if x.get("LSHandlerURLScheme") == "https"), ""))')
+  open -b "\${b:-com.apple.Safari}" "$1"
+else xdg-open "$1"; fi`;
 
 export default class EditorGroup extends View {
   init(_props, cx) {
@@ -242,12 +251,7 @@ export default class EditorGroup extends View {
       cx.spawn(async cx => {
         try {
           // A file on another machine is copied here first; a local one keeps its relative links.
-          let src = tab.path;
-          await exec("mkdir", ["-p", `${appHome()}/${HTML_DIR}`]);
-          if (tab.on) {
-            src = `${appHome()}/${HTML_DIR}/${id}.html`;
-            await writeTextFile(src, text, null).catch(() => {}); // already written for this hash
-          }
+          const src = await this.localFile(tab, text);
           const r = await exec("sh", ["-c", SHOT, "html", `${appHome()}/mods/${MOD}/html_shot.cjs`,
             src, `${appHome()}/${p.path}`, String(width), look]);
           const [w, h, cut] = r.stdout.trim().split(/\s+/);
@@ -259,6 +263,33 @@ export default class EditorGroup extends View {
     }
     if (p?.state === "ready") this.shown.set(k, p);
     return p?.state === "error" ? p : this.shown.get(k) ?? p ?? { state: "pending" };
+  }
+
+  // A local path Chrome or a browser can open. A file on another machine is copied here first,
+  // so its relative links (CSS, images) don't load; a local one keeps them.
+  async localFile(tab, text) {
+    const dir = `${appHome()}/${HTML_DIR}`, made = await exec("mkdir", ["-p", dir]);
+    if (made.code !== 0) throw new Error(made.stderr.trim() || `cannot create ${dir}`);
+    if (!tab.on) return tab.path;
+    const copy = `${dir}/${hash(`${tab.on}:${tab.path}\n${text}`)}.html`;
+    // A write onto an existing file is refused; that's fine only if it already holds this text.
+    await writeTextFile(copy, text, null).catch(async e => {
+      if (await readTextFile(copy).catch(() => null) !== text) throw e;
+    });
+    return copy;
+  }
+
+  // For what the preview can't do: hover, clicks, <details>.
+  openInBrowser(tab, cx) {
+    const text = this.docs.get(keyOf(tab))?.text;
+    if (tab.on && text == null) return; // not read yet: nothing to copy
+    cx.spawn(async () => {
+      const fail = body => notify({ title: "Cannot open in browser", body, level: "error" });
+      try {
+        const r = await exec("sh", ["-c", BROWSER, "browser", await this.localFile(tab, text)]);
+        if (r.code !== 0) fail(r.stderr.trim() || `exit ${r.code}`);
+      } catch (e) { fail(String(e.message ?? e)); }
+    });
   }
 
   htmlView(tab, text, t, cx) {
@@ -316,6 +347,9 @@ export default class EditorGroup extends View {
         .when(canPreview(g.tabs.find(x => keyOf(x) === g.active)?.path), el => el.child(
           this.iconButton(t, "eg-md", g.preview.includes(g.active) ? "source" : "preview",
             "Toggle preview (⌘⇧V)", () => { this.activate(); this.togglePreview(g.active); })))
+        .when(isHtml(g.tabs.find(x => keyOf(x) === g.active)?.path), el => el.child(
+          this.iconButton(t, "eg-browser", "browser", "Open in browser",
+            cx => { this.activate(); const tab = g.tabs.find(x => keyOf(x) === g.active); if (tab) this.openInBrowser(tab, cx); })))
         .when(Boolean(g.active), el => el.child(this.iconButton(t, "eg-split", "split", "Split right (⌘\\)",
           () => { this.activate(); const tab = g.tabs.find(x => keyOf(x) === g.active); if (tab) this.split(tab); }))));
   }
