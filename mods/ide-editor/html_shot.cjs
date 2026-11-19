@@ -7,6 +7,7 @@
 // Prints "<width> <height>" in CSS pixels; the PNG is twice that (SCALE).
 const path = require("node:path");
 const fs = require("node:fs");
+const { pathToFileURL } = require("node:url");
 const puppeteer = require("puppeteer");
 
 const SCALE = 2, MAX_HEIGHT = 12000, SETTLE_MS = 5000;
@@ -19,7 +20,8 @@ const SCALE = 2, MAX_HEIGHT = 12000, SETTLE_MS = 5000;
     await page.setViewport({ width: Math.max(200, Number(width) || 800), height: 100, deviceScaleFactor: SCALE });
     await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: look === "light" ? "light" : "dark" }]);
     // Wait for the page's own requests (fonts, scripts from a CDN) a few seconds at most.
-    await page.goto("file://" + path.resolve(page_), { waitUntil: "networkidle0", timeout: SETTLE_MS })
+    // A URL, not "file://" + path: "#", "?" and "%" in a file name are path, not URL syntax.
+    await page.goto(pathToFileURL(path.resolve(page_)).href, { waitUntil: "networkidle0", timeout: SETTLE_MS })
       .catch(e => { if (!/timeout/i.test(String(e?.message))) throw e; });
     const size = await page.evaluate(() => {
       const d = document.documentElement, b = document.body;
