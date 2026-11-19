@@ -48,8 +48,8 @@ Left to right, the same frame as Herdr's `main` layout:
   pane header (`ide-pane`: the shipped `pane` header plus find). Panes can be terminals,
   agents or **editor panes** (`ide-editor`):
   - a 34px tab strip in `chrome` (active tab on `background` with a 1px `accent` top edge,
-    a × on each tab), and on the right a preview/source toggle (markdown and HTML files only) and a
-    split button;
+    a × on each tab), and on the right a preview/source toggle (markdown and HTML files only), an open-in-browser
+    button (HTML files only) and a split button;
   - a 24px breadcrumb with the file's path (`~/…`);
   - the file as a read-only code view with line numbers and syntax colors, or rendered
     markdown (24px side padding, 14px text in the system UI font) with diagrams as centered
@@ -90,6 +90,9 @@ Left to right, the same frame as Herdr's `main` layout:
   last render scaled meanwhile; editing the file re-renders on the next 3 s reload. A file
   on another machine is copied here first, so its relative links (CSS, images) don't load;
   a local file's do. Pages taller than 12,000px are cut, with a note.
+- **Open in browser** (↗, HTML files, preview or source): opens the file in the default
+  browser, for hover, clicks and `<details>`. A remote file opens as the same local copy,
+  once its text has been read. A failure posts an error notification.
 - **Keys:** ⌘⇧V and ⌘\\ work while this layout shows (`layout:herdr-ide`); ⌘W closes a
   file tab while an editor pane has the keyboard (elsewhere it still closes the Herdr
   tab). Splits are Herdr's own: ⌘D right, ⌘⇧D down.
@@ -137,6 +140,10 @@ Left to right, the same frame as Herdr's `main` layout:
   clip) into `data/ide-html/<hash>.png`, keyed by look, width step, file and text; it
   prints the CSS size. A remote file is first written to `data/ide-html/<hash>.html`.
   One render runs per group at a time; `shown` keeps each tab's last finished page.
+  Open in browser: `sh -c` reads the `https` handler's bundle id from LaunchServices'
+  `com.apple.launchservices.secure.plist` (`python3`, `plistlib`) and runs `open -b` on the
+  file (Safari when none is set; `xdg-open` off macOS). Plain `open` would use the `.html`
+  owner, often an editor. `notify()` reports a failure.
 - `ide-agents` colors: the herdr-core terminal label `herdr-ide.color=#rrggbb`, written by the
   row menu (the mod opened as a popup with `props.tabMenu`) with `hc label` and read from
   `terminals()[i].labels`. Like Herdr's pins (`herdr.pinned`) it follows the session across
@@ -251,6 +258,7 @@ Left to right, the same frame as Herdr's `main` layout:
   ⌘⇧V again shows the source.
 - An HTML file with a `<style>`, an inline `<svg>` and a `<script>` that writes text shows
   all three after ⌘⇧V, in the theme's look, both for a local file and one on a machine.
+  Its ↗ button opens it in the default browser.
 - Asking Claude Code to run three background subagents shows three spinner rows under
   that agent within 3 s, and each row disappears when its subagent finishes.
 - Folding the sidebar keeps its toggle at the top, with nothing at the bottom of the
