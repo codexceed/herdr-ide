@@ -39,22 +39,10 @@ const GLOW = "2e"; // the tint: the color at 0x2e / 255 ≈ 18%
 const LABEL = "herdr-ide.color", FADE = 48, PEAK = 0xe6, CURVE = 1.8; // PEAK ≈ 90%
 const fade = hex => Array.from({ length: FADE }, (_, i) =>
   hex + Math.round(PEAK * ((i + 1) / FADE) ** CURVE).toString(16).padStart(2, "0"));
-// The header's buttons sit on the strong end of that fade, where the theme's dim gray all but
-// vanishes. They take the theme's foreground or background instead, whichever has the higher
-// WCAG contrast against the hue as drawn (PEAK alpha over the header's background).
-const rgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
-const luminance = c => c.map(v => (v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
-  .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
-const contrast = (a, b) => {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return (hi + 0.05) / (lo + 0.05);
-};
-const HEX = /^#[0-9a-f]{6}/i;
-const ink = (t, hue) => {
-  if (![t.foreground, t.background].every(c => HEX.test(c ?? ""))) return t.foreground;
-  const under = rgb(t.background), on = rgb(hue).map((v, i) => v * PEAK / 255 + under[i] * (1 - PEAK / 255));
-  return contrast(rgb(t.foreground), on) >= contrast(rgb(t.background), on) ? t.foreground : t.background;
-};
+// The header's buttons sit in a solid black box with white icons, always shown: over an agent's
+// color a hover-only, theme-gray row was hard to find. Hovering a button gives it a halo: a soft
+// white fill and ring (gpui-kit's shadows are black presets, so there's no colored glow).
+const BOX = "#000000", ICON = "#ffffff", HALO = "#ffffff26", RING = "#ffffff66", NO_RING = "#ffffff00";
 const glow = (t, status) => (status === "done" || status === "blocked") && t[status]
   ? { edge: t[status], tint: t[status].slice(0, 7) + GLOW } : null;
 
@@ -80,7 +68,6 @@ const snippet = m => {
 
 export default class Pane extends View {
   init(_props, cx) {
-    this.hovered = false;
     this.finding = false;
     this.lines = null;
     this.source = null; // the key of the editor file this.lines came from
@@ -177,14 +164,17 @@ export default class Pane extends View {
     this.close();
   }
 
-  // color: the icon's ink; null for the theme's dim gray, brightening on hover.
-  button(t, id, icon, command, args, color) {
+  // 14px icon + 2px padding + 1px ring each side = 20px; in the box's 2px padding = 24px,
+  // the height of the color strip in the 30px header.
+  button(id, icon, command, args) {
     return div()
       .id(id)
-      .p(3)
+      .p(2)
       .rounded(4)
-      .text_color(color ?? t.dim)
-      .hover((s) => s.bg(t.hover).text_color(color ?? t.foreground))
+      .border_1()
+      .border_color(NO_RING)
+      .text_color(ICON)
+      .hover((s) => s.bg(HALO).border_color(RING))
       .on_click((_e, cx) => {
         cx.stop_propagation();
         run(command, args);
@@ -249,7 +239,6 @@ export default class Pane extends View {
     const lit = glow(t, st);
     const hue = /^#[0-9a-f]{6}$/i.test(terminals().find(x => x.address === p.terminal)?.labels?.[LABEL] ?? "")
       ? terminals().find(x => x.address === p.terminal).labels[LABEL] : null;
-    const on = hue ? ink(t, hue) : null;
     return h_flex()
       .id(`pane-head-${pane}`)
       .relative()
@@ -263,7 +252,6 @@ export default class Pane extends View {
       .when(!lit, el => el.border_b(1).border_color(t.border))
       .when(Boolean(lit), el => el.border_b(2).border_color(lit.edge))
       .text_size(12)
-      .on_hover((hovered, cx) => { this.hovered = hovered; cx.notify(); })
       .on_click(() => run("pane.focus", { pane }))
       .when(Boolean(pic), (el) => el.child(pic))
       .child(div().flex_none().truncate().max_w(260).font_medium().text_color(t.foreground).child(name))
@@ -271,10 +259,10 @@ export default class Pane extends View {
       .when(st === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
       .when(st === "blocked", el => el.child(div().flex_none().px(6).h(18).flex().items_center().rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).child("Needs you")))
       .when(st === "done", el => el.child(div().size(7).flex_none().rounded(4).bg(t.done)))
-      .when(this.hovered, el => el
-        .child(this.button(t, `ph-r-${pane}`, "split-right", "pane.split", { direction: "right", pane }, on))
-        .child(this.button(t, `ph-d-${pane}`, "split-down", "pane.split", { direction: "down", pane }, on))
-        .child(this.button(t, `ph-z-${pane}`, p.zoomed ? "unzoom" : "zoom", "pane.zoom", { pane }, on))
-        .child(this.button(t, `ph-x-${pane}`, "close", "pane.close", { pane }, on)));
+      .child(h_flex().flex_none().gap(2).p(2).rounded(6).bg(BOX)
+        .child(this.button(`ph-r-${pane}`, "split-right", "pane.split", { direction: "right", pane }))
+        .child(this.button(`ph-d-${pane}`, "split-down", "pane.split", { direction: "down", pane }))
+        .child(this.button(`ph-z-${pane}`, p.zoomed ? "unzoom" : "zoom", "pane.zoom", { pane }))
+        .child(this.button(`ph-x-${pane}`, "close", "pane.close", { pane })));
   }
 }
