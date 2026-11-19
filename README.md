@@ -68,7 +68,7 @@ No network access. The mods run local programs and read outside their folder:
 | Split terminals / agents | ⌘D (right), ⌘⇧D (down) |
 | Watch a swarm | Subagents appear under their agent while they run |
 | See which agent needs you | A pane's header lights up blue when its agent finishes and red when it asks you something |
-| Tell agents apart | Right-click an agent row: **Rename tab**, or pick a color for its border. The focused row lights up with a halo |
+| Tell agents apart | Right-click an agent row: **Rename tab** (each agent's own **Rename** once Herdr ships `pane.rename`), or pick a color: its row's border and the right side of its pane header. The focused row lights up with a halo |
 
 See [RECIPE.md](RECIPE.md) for exactly what each part does and how it's built.
 
