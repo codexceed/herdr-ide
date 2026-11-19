@@ -6,12 +6,20 @@ const path = require('node:path');
 
 const source = fs.readFileSync(path.join(__dirname, '../mods/ide-pane/main.js'), 'utf8')
   .replace(/^import .*;\n/gm, '').replace('export default class Pane', 'class Pane');
-const { matches, snippet, SHOWN, glow, fade } = vm.runInNewContext(source + '\n({ matches, snippet, SHOWN, glow, fade });', { View: class {} });
+const { matches, snippet, SHOWN, glow, fade, ink, contrast, rgb } = vm.runInNewContext(source + '\n({ matches, snippet, SHOWN, glow, fade, ink, contrast, rgb });', { View: class {} });
 
 test('the header color fades in from faint to about 90% at the right edge, never stepping back', () => {
   const alphas = fade('#3fb5a8').map(c => parseInt(c.slice(7), 16));
   assert.ok(alphas[0] < 8 && alphas.at(-1) >= 0xe0, JSON.stringify(alphas));
   assert.ok(alphas.every((a, i) => i === 0 || a >= alphas[i - 1]));
+});
+
+test('header buttons over the agent color take whichever theme ink reads better on it', () => {
+  const t = { foreground: '#e6e6e6', background: '#1b1c1f', dim: '#6b6f76' };
+  assert.equal(ink(t, '#5fb3a6'), t.background); // light teal (the reported case): dark icons
+  assert.equal(ink(t, '#1f3a8a'), t.foreground); // deep blue: light icons
+  assert.ok(contrast(rgb(t.background), rgb('#5fb3a6')) >= 4.5);
+  assert.equal(ink({ foreground: 'white' }, '#5fb3a6'), 'white'); // non-hex theme: no guessing
 });
 
 test('a finished agent lights its header blue, one that needs you red, others not at all', () => {
