@@ -268,10 +268,14 @@ export default class EditorGroup extends View {
   // A local path Chrome or a browser can open. A file on another machine is copied here first,
   // so its relative links (CSS, images) don't load; a local one keeps them.
   async localFile(tab, text) {
-    await exec("mkdir", ["-p", `${appHome()}/${HTML_DIR}`]);
+    const dir = `${appHome()}/${HTML_DIR}`, made = await exec("mkdir", ["-p", dir]);
+    if (made.code !== 0) throw new Error(made.stderr.trim() || `cannot create ${dir}`);
     if (!tab.on) return tab.path;
-    const copy = `${appHome()}/${HTML_DIR}/${hash(`${tab.on}:${tab.path}\n${text}`)}.html`;
-    await writeTextFile(copy, text, null).catch(() => {}); // already written for this text
+    const copy = `${dir}/${hash(`${tab.on}:${tab.path}\n${text}`)}.html`;
+    // A write onto an existing file is refused; that's fine only if it already holds this text.
+    await writeTextFile(copy, text, null).catch(async e => {
+      if (await readTextFile(copy).catch(() => null) !== text) throw e;
+    });
     return copy;
   }
 

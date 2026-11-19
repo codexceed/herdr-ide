@@ -147,7 +147,8 @@ function htmlGroup() {
     focused: () => ({ pane: 'pane-a', tab: 'tab' }), panes: () => [{ pane: 'pane-a', mod: 'ide-editor', tab: 'tab' }],
     run() {}, theme: () => ({}), settings: () => ({ dark: true }), home: () => '/h', appHome: () => '/app',
     exec: async (cmd, args) => { execs.push([cmd, ...args]); return cmd === 'sh' ? reply : { code: 0, stdout: '', stderr: '' }; },
-    writeTextFile: async p => { writes.push(p); return null; },
+    writeTextFile: async (p, text) => { writes.push(p); if (state.disk && p in state.disk) throw new Error('exists'); if (state.full) throw new Error('No space left on device'); return null; },
+    readTextFile: async p => state.disk?.[p] ?? null,
     notify: n => { notes.push(n); return 'n'; },
   };
   const source = fs.readFileSync(path.join(__dirname, '../mods/ide-editor/main.js'), 'utf8')
@@ -240,4 +241,32 @@ test('a failed Open in browser posts an error notification', async () => {
   reply({ code: 1, stdout: '', stderr: 'LSOpenURLsWithRole() failed\n' });
   g.openInBrowser({ path: '/x/c.html', on: null }, cx); await settle();
   assert.equal(notes.length, 1); assert.equal(notes[0].level, 'error'); assert.match(notes[0].body, /LSOpen/);
+});
+
+test('a remote copy that already holds the text is reused; a failed copy is reported, not opened', async () => {
+  const { g, cx, state, execs, notes, settle } = htmlGroup(), tab = { path: '/home/s/curve.html', on: 'devbox' };
+  g.docs.set('devbox:/home/s/curve.html', { text: '<p>remote' });
+  state.disk = {};
+  g.openInBrowser(tab, cx); await settle();
+  const copy = execs.find(e => e[0] === 'sh').at(-1);
+  state.disk[copy] = '<p>remote'; execs.length = 0;
+  g.openInBrowser(tab, cx); await settle();
+  assert.equal(execs.filter(e => e[0] === 'sh').length, 1, 'existing complete copy: opened');
+  state.disk[copy] = '<p>rem'; execs.length = 0;
+  g.openInBrowser(tab, cx); await settle();
+  assert.equal(execs.filter(e => e[0] === 'sh').length, 0, 'partial copy: not opened');
+  assert.equal(notes.at(-1).level, 'error');
+  state.disk = {}; state.full = true;
+  g.openInBrowser(tab, cx); await settle();
+  assert.equal(execs.filter(e => e[0] === 'sh').length, 0);
+  assert.match(notes.at(-1).body, /No space/);
+});
+
+test('a failed remote copy shows as a preview error too', async () => {
+  const { g, cx, state, execs, settle } = htmlGroup(), tab = { path: '/home/s/c.html', on: 'devbox' };
+  state.full = true; g.width = 700;
+  g.htmlPage(tab, '<p>x', cx); await settle();
+  assert.equal(execs.filter(e => e[0] === 'sh').length, 0, 'Chrome not started');
+  const p = g.htmlPage(tab, '<p>x', cx);
+  assert.equal(p.state, 'error'); assert.match(p.error, /No space/);
 });
