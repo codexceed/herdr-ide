@@ -39,6 +39,22 @@ const GLOW = "2e"; // the tint: the color at 0x2e / 255 ≈ 18%
 const LABEL = "herdr-ide.color", FADE = 48, PEAK = 0xe6, CURVE = 1.8; // PEAK ≈ 90%
 const fade = hex => Array.from({ length: FADE }, (_, i) =>
   hex + Math.round(PEAK * ((i + 1) / FADE) ** CURVE).toString(16).padStart(2, "0"));
+// The header's buttons sit on the strong end of that fade, where the theme's dim gray all but
+// vanishes. They take the theme's foreground or background instead, whichever has the higher
+// WCAG contrast against the hue as drawn (PEAK alpha over the header's background).
+const rgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const luminance = c => c.map(v => (v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
+  .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+const contrast = (a, b) => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+};
+const HEX = /^#[0-9a-f]{6}/i;
+const ink = (t, hue) => {
+  if (![t.foreground, t.background].every(c => HEX.test(c ?? ""))) return t.foreground;
+  const under = rgb(t.background), on = rgb(hue).map((v, i) => v * PEAK / 255 + under[i] * (1 - PEAK / 255));
+  return contrast(rgb(t.foreground), on) >= contrast(rgb(t.background), on) ? t.foreground : t.background;
+};
 const glow = (t, status) => (status === "done" || status === "blocked") && t[status]
   ? { edge: t[status], tint: t[status].slice(0, 7) + GLOW } : null;
 
@@ -161,13 +177,14 @@ export default class Pane extends View {
     this.close();
   }
 
-  button(t, id, icon, command, args) {
+  // color: the icon's ink; null for the theme's dim gray, brightening on hover.
+  button(t, id, icon, command, args, color) {
     return div()
       .id(id)
       .p(3)
       .rounded(4)
-      .text_color(t.dim)
-      .hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .text_color(color ?? t.dim)
+      .hover((s) => s.bg(t.hover).text_color(color ?? t.foreground))
       .on_click((_e, cx) => {
         cx.stop_propagation();
         run(command, args);
@@ -232,6 +249,7 @@ export default class Pane extends View {
     const lit = glow(t, st);
     const hue = /^#[0-9a-f]{6}$/i.test(terminals().find(x => x.address === p.terminal)?.labels?.[LABEL] ?? "")
       ? terminals().find(x => x.address === p.terminal).labels[LABEL] : null;
+    const on = hue ? ink(t, hue) : null;
     return h_flex()
       .id(`pane-head-${pane}`)
       .relative()
@@ -254,9 +272,9 @@ export default class Pane extends View {
       .when(st === "blocked", el => el.child(div().flex_none().px(6).h(18).flex().items_center().rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).child("Needs you")))
       .when(st === "done", el => el.child(div().size(7).flex_none().rounded(4).bg(t.done)))
       .when(this.hovered, el => el
-        .child(this.button(t, `ph-r-${pane}`, "split-right", "pane.split", { direction: "right", pane }))
-        .child(this.button(t, `ph-d-${pane}`, "split-down", "pane.split", { direction: "down", pane }))
-        .child(this.button(t, `ph-z-${pane}`, p.zoomed ? "unzoom" : "zoom", "pane.zoom", { pane }))
-        .child(this.button(t, `ph-x-${pane}`, "close", "pane.close", { pane })));
+        .child(this.button(t, `ph-r-${pane}`, "split-right", "pane.split", { direction: "right", pane }, on))
+        .child(this.button(t, `ph-d-${pane}`, "split-down", "pane.split", { direction: "down", pane }, on))
+        .child(this.button(t, `ph-z-${pane}`, p.zoomed ? "unzoom" : "zoom", "pane.zoom", { pane }, on))
+        .child(this.button(t, `ph-x-${pane}`, "close", "pane.close", { pane }, on)));
   }
 }
