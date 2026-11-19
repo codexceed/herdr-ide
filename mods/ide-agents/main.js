@@ -89,6 +89,23 @@ export function legacyLabels(agents, tabColors, paneColors, labelsOf) {
     .map(a => [a.address, paneColors?.[a.pane] ?? tabColors?.[a.tab]])
     .filter(([, hex]) => SWATCHES.some(s => s.hex === hex));
 }
+
+// The shared-state colors still to move: an entry goes only once at least one of its agents is
+// listed and every listed one has its label (`labeled(agent)`). A failed write, or an agent not
+// listed yet (its machine away), keeps the entry for the next try. Returns [tabColors, paneColors],
+// null when empty. Tab and pane ids aren't reused, so an entry for a closed one is inert.
+export function unmovedLegacy(tabColors, paneColors, agents, labeled) {
+  const keep = (colors, key) => {
+    const left = Object.fromEntries(Object.entries(colors ?? {}).filter(([id]) => {
+      const mine = agents.filter(a => a[key] === id);
+      return !mine.length || !mine.every(labeled);
+    }));
+    return Object.keys(left).length ? left : null;
+  };
+  return [keep(tabColors, "tab"), keep(paneColors, "pane")];
+}
+const RETRY = 30000; // ms between tries to move colors that didn't make it
+
 export const SWATCHES = [
   { name: "Red", hex: "#e06c75" }, { name: "Orange", hex: "#e5904f" }, { name: "Amber", hex: "#d9b44a" },
   { name: "Green", hex: "#5fb878" }, { name: "Teal", hex: "#3fb5a8" }, { name: "Blue", hex: "#5b9cf0" },
@@ -548,12 +565,20 @@ export default class Agents extends View {
     // otherwise read the same.
     const tabs = spaces().flatMap(s => s.tabs);
     const labelsOf = address => all.find(x => x.address === address)?.labels;
-    // Colors kept in shared state before labels move onto their terminals, once.
-    if (!this.movedColors && list.length && LEGACY.some(k => shared(k))) {
-      this.movedColors = true;
-      Promise.all(legacyLabels(list, shared(LEGACY[0]), shared(LEGACY[1]), labelsOf)
-        .map(([address, hex]) => hc(["label", address, `${LABEL}=${hex}`])))
-        .then(() => LEGACY.forEach(k => setShared(k, null)));
+    // Colors kept in shared state before labels move onto their terminals. Only entries whose
+    // labels were written leave shared state; the rest are tried again after RETRY.
+    if (!this.moving && list.length && LEGACY.some(k => shared(k)) && Date.now() - (this.movedAt ?? 0) > RETRY) {
+      this.moving = true;
+      this.movedAt = Date.now();
+      const agentsNow = list;
+      Promise.all(legacyLabels(agentsNow, shared(LEGACY[0]), shared(LEGACY[1]), labelsOf)
+        .map(([address, hex]) => hc(["label", address, `${LABEL}=${hex}`]).then(r => (r.code === 0 ? address : null), () => null)))
+        .then(done => {
+          const written = new Set(done.filter(Boolean));
+          const labeled = a => written.has(a.address) || Boolean(colorFrom(labelsOf(a.address)));
+          unmovedLegacy(shared(LEGACY[0]), shared(LEGACY[1]), agentsNow, labeled).forEach((left, i) => setShared(LEGACY[i], left));
+        })
+        .finally(() => { this.moving = false; });
     }
     // A row's border: its agent's color (else white), full strength only on the focused row.
     const colorOf = a => colorFrom(labelsOf(a.address)) ?? PLAIN;

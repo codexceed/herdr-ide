@@ -21,7 +21,7 @@ function load() {
     terminals: () => [], commands: () => state.commands, notify() {},
     hc: args => { state.hc.push(args.join(' ')); return Promise.resolve({ code: 0, stdout: '', stderr: '' }); },
   };
-  const mod = vm.runInNewContext(source + '\n({ Agents, SWATCHES, TINT, mix, byTab, colorFrom, legacyLabels, LABEL });', sandbox);
+  const mod = vm.runInNewContext(source + '\n({ Agents, SWATCHES, TINT, mix, byTab, colorFrom, legacyLabels, unmovedLegacy, LABEL });', sandbox);
   return { state, ...mod };
 }
 
@@ -101,4 +101,16 @@ test('colors kept in shared state before move onto terminals without overwriting
   const labelsOf = a => (a === 't4' ? { [LABEL]: blue } : {});
   const moved = legacyLabels(agents, { A: red }, { p2: blue, p3: '#123456' }, labelsOf);
   assert.equal(JSON.stringify(moved), JSON.stringify([['t1', red], ['t2', blue]]));
+});
+test('a legacy color leaves shared state only once its agents carry the label', () => {
+  const { unmovedLegacy } = load();
+  const red = '#e06c75', blue = '#5b9cf0';
+  const agents = [{ address: 't1', tab: 'A', pane: 'p1' }, { address: 't2', tab: 'A', pane: 'p2' }, { address: 't3', tab: 'B', pane: 'p3' }];
+  // t2's write failed: tab A stays; tab B is done; tab C has no agent listed yet (machine away): stays.
+  const labeled = a => a.address !== 't2';
+  const [tabs, panes] = unmovedLegacy({ A: red, B: blue, C: red }, { p3: blue, p9: red }, agents, labeled);
+  assert.equal(JSON.stringify(tabs), JSON.stringify({ A: red, C: red }));
+  assert.equal(JSON.stringify(panes), JSON.stringify({ p9: red }));
+  // Every write made: nothing left.
+  assert.equal(JSON.stringify(unmovedLegacy({ A: red }, { p1: blue }, agents, () => true)), '[null,null]');
 });

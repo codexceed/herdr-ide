@@ -129,7 +129,9 @@ Left to right, the same frame as Herdr's `main` layout:
   `terminals()[i].labels`. Like Herdr's pins (`herdr.pinned`) it follows the session across
   pane moves and clients and ends with it. A label that isn't a swatch is ignored
   (`colorFrom()`). Colors from v0.7 (`shared("ide-agents.tab-colors")`, by tab) move onto
-  their terminals once (`legacyLabels()`) and the shared key is cleared.
+  their terminals (`legacyLabels()`); an entry leaves shared state only once its listed agents
+  carry the label (`unmovedLegacy()`), so a failed write or an agent on a machine that's away
+  is tried again (every 30 s) instead of lost.
   `ide-pane` fills the right 36% of the pane header with the same color, easing in from the
   left to 90% at the edge (48 strips of rising alpha, `alpha ∝ x^1.8`: an element takes only
   solid colors), inset 3–4px so it stays inside the pane's rounded border. `SWATCHES` holds only colors that stand out on a dark
