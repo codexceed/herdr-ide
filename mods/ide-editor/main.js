@@ -5,17 +5,19 @@
 //   { tabs: [{ path, on }], active: key, preview: [key], tab, open, used, pane? }
 // The Files panel (mods/ide-files) adds tabs to the most recently used group of the
 // current Herdr tab, or splits a new group to the right.
-// Commands (keys.json): ide-editor.markdown (cmd-shift-v), .split (cmd-\), .close (cmd-w).
+// Commands (keys.json): ide-editor.markdown (cmd-shift-v: markdown or HTML preview), .split (cmd-\), .close (cmd-w).
 // Find (cmd-f) lives in the pane header (mods/ide-pane); this pane lists its matches.
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, TextView } from "gpui-base";
-import { props, shared, setShared, focused, panes, run, exec, readTextFile, theme, settings, appHome, home, nextCommand } from "herdr";
+import { props, shared, setShared, focused, panes, run, exec, readTextFile, writeTextFile, theme, settings, appHome, home, nextCommand } from "herdr";
 
 const KEY = "ide-editor.groups", ACTIVE = "ide-editor.active", MOD = "ide-editor", FIND = "ide-find";
 const LANG = { ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js", toml: "yaml", jsonc: "json", svelte: "html", vue: "html" };
 const keyOf = t => `${t.on ?? ""}:${t.path}`;
 const nameOf = path => path.split(/[\\/]/).pop();
 const isMarkdown = path => /\.(md|markdown|mdx)$/i.test(path ?? "");
+const isHtml = path => /\.(html?|xhtml)$/i.test(path ?? "");
+const canPreview = path => isMarkdown(path) || isHtml(path);
 const newId = () => "g" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const all = () => JSON.parse(JSON.stringify(shared(KEY) ?? {}));
 const blank = () => ({ tabs: [], active: null, preview: [], open: false });
@@ -49,6 +51,14 @@ const mermaidError = stderr => {
 // Geist, the UI font, ships without bold or italic faces; the system font has both.
 const PREVIEW_FONT = ".SystemUIFont";
 const diagrams = new Map(); // shared by every group in this mod: hash -> { state, path, w, h, error }
+
+// HTML: mods have no web view, so headless Chrome (puppeteer, from mermaid-cli) lays the page
+// out at the pane's width, scripts and all, and the preview shows the PNG. Static: no hover or clicks.
+const HTML_DIR = "data/ide-html", HTML_STEP = 20; // re-render when the width moves a step
+const SHOT = `m=$(command -v mmdc) || { echo "HTML preview needs @mermaid-js/mermaid-cli (npm i -g), which brings puppeteer" >&2; exit 1; }
+pkg=$(dirname "$(dirname "$(readlink -f "$m")")")
+NODE_PATH="$pkg/node_modules:$(dirname "$(dirname "$pkg")")" exec node "$@"`;
+const pages = new Map(); // hash -> { state, path, w, h, cut, error }
 
 export default class EditorGroup extends View {
   init(_props, cx) {
@@ -115,7 +125,7 @@ export default class EditorGroup extends View {
 
   command(c, cx) {
     const g = this.group(), tab = g.tabs.find(t => keyOf(t) === g.active);
-    if (c === "markdown" && tab && isMarkdown(tab.path)) this.togglePreview(g.active);
+    if (c === "markdown" && tab && canPreview(tab.path)) this.togglePreview(g.active);
     else if (c === "close" && tab) this.closeTab(g.active);
     else if (c === "split" && tab) this.split(tab);
   }
@@ -218,6 +228,49 @@ export default class EditorGroup extends View {
     });
   }
 
+  // One render at a time per group: dragging a split asks for many widths, and only the last
+  // matters. Until the wanted render lands, the tab's last rendered page stands in, scaled.
+  htmlPage(tab, text, cx) {
+    const k = keyOf(tab), width = Math.max(200, Math.round((this.width ?? 0) / HTML_STEP) * HTML_STEP);
+    const look = settings().dark === false ? "light" : "dark";
+    const id = hash(`${look}\n${width}\n${tab.on ?? ""}:${tab.path}\n${text}`);
+    this.shown ??= new Map();
+    let p = pages.get(id);
+    if (!p && this.width && !this.rendering) {
+      p = { state: "pending", path: `${HTML_DIR}/${id}.png` };
+      pages.set(id, p); this.rendering = true;
+      cx.spawn(async cx => {
+        try {
+          // A file on another machine is copied here first; a local one keeps its relative links.
+          let src = tab.path;
+          await exec("mkdir", ["-p", `${appHome()}/${HTML_DIR}`]);
+          if (tab.on) {
+            src = `${appHome()}/${HTML_DIR}/${id}.html`;
+            await writeTextFile(src, text, null).catch(() => {}); // already written for this hash
+          }
+          const r = await exec("sh", ["-c", SHOT, "html", `${appHome()}/mods/${MOD}/html_shot.cjs`,
+            src, `${appHome()}/${p.path}`, String(width), look]);
+          const [w, h, cut] = r.stdout.trim().split(/\s+/);
+          if (r.code !== 0 || !Number(w) || !Number(h)) throw new Error(r.stderr.trim() || "headless Chrome failed");
+          Object.assign(p, { state: "ready", w: Number(w), h: Number(h), cut: cut === "cut" });
+        } catch (e) { Object.assign(p, { state: "error", error: String(e.message ?? e) }); }
+        finally { this.rendering = false; cx.notify(); }
+      });
+    }
+    if (p?.state === "ready") this.shown.set(k, p);
+    return p?.state === "error" ? p : this.shown.get(k) ?? p ?? { state: "pending" };
+  }
+
+  htmlView(tab, text, t, cx) {
+    const p = this.htmlPage(tab, text, cx);
+    if (p.state === "pending") return div().p(12).text_size(12).text_color(t.dim).child("Rendering page…");
+    if (p.state === "error") return div().p(12).text_size(12).text_color(t.ansi1).child(`Cannot render this page: ${p.error}`);
+    const s = Math.min(1, (this.width ?? p.w) / p.w);
+    return v_flex()
+      .child(image(p.path).w(p.w * s).h(p.h * s))
+      .when(p.cut, el => el.child(div().p(12).text_size(12).text_color(t.dim).child("Page cut short: open it in a browser for the rest")));
+  }
+
   iconButton(t, id, icon, title, onClick) {
     return div().id(id).p(4).rounded(4).flex_none().cursor_pointer().text_color(t.muted)
       .hover(s => s.bg(t.hover).text_color(t.foreground))
@@ -260,7 +313,7 @@ export default class EditorGroup extends View {
             .child(svg(`mods/${MOD}/close.svg`).size(12)));
       })))
       .child(h_flex().flex_none().px(6).gap(2).items_center()
-        .when(isMarkdown(g.tabs.find(x => keyOf(x) === g.active)?.path), el => el.child(
+        .when(canPreview(g.tabs.find(x => keyOf(x) === g.active)?.path), el => el.child(
           this.iconButton(t, "eg-md", g.preview.includes(g.active) ? "source" : "preview",
             "Toggle preview (⌘⇧V)", () => { this.activate(); this.togglePreview(g.active); })))
         .when(Boolean(g.active), el => el.child(this.iconButton(t, "eg-split", "split", "Split right (⌘\\)",
@@ -297,6 +350,10 @@ export default class EditorGroup extends View {
       .when(Boolean(this.findList(t)), el => el.child(this.findList(t)))
       .child(!tab
         ? v_flex().flex_1().items_center().justify_center().text_color(t.dim).child("No open files · pick one in Files")
+        : preview && isHtml(tab.path)
+          ? v_flex().id(`eg-html-${k}`).flex_1().min_h(0).overflow_y_scrollbar()
+              .on_size_change((size, cx) => { if (size.width !== this.width) { this.width = size.width; cx.notify(); } })
+              .child(this.htmlView(tab, d.text, t, cx))
         : preview
           ? v_flex().id(`eg-md-${k}`).flex_1().min_h(0).overflow_y_scrollbar().px(24).py(16).text_size(14).font_family(PREVIEW_FONT)
               .on_size_change((size, cx) => { if (size.width !== this.width) { this.width = size.width; cx.notify(); } })

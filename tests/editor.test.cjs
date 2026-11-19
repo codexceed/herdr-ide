@@ -132,3 +132,85 @@ test('mermaid errors keep the parse message and drop the stack trace', () => {
   assert.equal(mermaidError(stderr), "Parse error on line 3:\nExpecting 'AMP', got 'EOF'");
   assert.equal(mermaidError(''), '');
 });
+
+
+function htmlGroup() {
+  const execs = [], writes = [];
+  let reply = { code: 0, stdout: '700 477\n', stderr: '' };
+  const state = { groups: { a: { tabs: [], preview: [], pane: 'pane-a', tab: 'tab' } }, active: 'a' };
+  const element = new Proxy({}, { get: () => () => element });
+  const sandbox = {
+    View: class {}, div: () => element, svg: () => element, image: () => element, v_flex: () => element, h_flex: () => element,
+    Editor: { new: () => element }, TextView: {}, EditorState: { new: () => ({ release() {} }) },
+    props: () => ({ group: 'a' }), shared: key => key.endsWith('groups') ? state.groups : state.active,
+    setShared: (key, value) => { if (key.endsWith('groups')) state.groups = value; else state.active = value; },
+    focused: () => ({ pane: 'pane-a', tab: 'tab' }), panes: () => [{ pane: 'pane-a', mod: 'ide-editor', tab: 'tab' }],
+    run() {}, theme: () => ({}), settings: () => ({ dark: true }), home: () => '/h', appHome: () => '/app',
+    exec: async (cmd, args) => { execs.push([cmd, ...args]); return cmd === 'sh' ? reply : { code: 0, stdout: '', stderr: '' }; },
+    writeTextFile: async p => { writes.push(p); return null; },
+  };
+  const source = fs.readFileSync(path.join(__dirname, '../mods/ide-editor/main.js'), 'utf8')
+    .replace(/^import .*;\n/gm, '').replace('export default class EditorGroup', 'class EditorGroup');
+  const Group = vm.runInNewContext(source + '\nEditorGroup;', sandbox);
+  const g = new Group();
+  let pending = [];
+  const cx = { focus_handle: () => ({ focus() {}, is_focused: () => false }), spawn: fn => { pending.push(fn(cx)); }, timer: { every() {} }, notify() {} };
+  g.init({}, { ...cx, spawn() {} }); // init's command loop isn't under test
+  const settle = async () => { while (pending.length) { const p = pending; pending = []; await Promise.all(p); } };
+  return { g, cx, state, execs, writes, settle, reply: r => { reply = r; } };
+}
+
+test('cmd-shift-v toggles the preview for HTML files as for markdown, and not for others', () => {
+  const { g, cx, state } = htmlGroup();
+  for (const [file, on] of [['/x/curve.html', true], ['/x/a.htm', true], ['/x/notes.md', true], ['/x/main.js', false]]) {
+    state.groups.a.tabs = [{ path: file, on: null }]; state.groups.a.active = `:${file}`; state.groups.a.preview = [];
+    g.command('markdown', cx);
+    assert.equal(state.groups.a.preview.includes(`:${file}`), on, file);
+  }
+});
+
+test('an HTML preview waits for the pane width, then renders once per width step', async () => {
+  const { g, cx, execs, settle } = htmlGroup(), tab = { path: '/x/curve.html', on: null };
+  assert.equal(g.htmlPage(tab, '<p>hi', cx).state, 'pending');
+  assert.equal(execs.length, 0, 'no render before the width is known');
+  g.width = 704;
+  g.htmlPage(tab, '<p>hi', cx); g.htmlPage(tab, '<p>hi', cx);
+  await settle();
+  const shots = execs.filter(e => e[0] === 'sh');
+  assert.equal(shots.length, 1);
+  assert.deepEqual(shots[0].slice(-4), ['/x/curve.html', shots[0].at(-3), '700', 'dark']);
+  const p = g.htmlPage(tab, '<p>hi', cx);
+  assert.equal(p.state, 'ready'); assert.equal(p.w, 700); assert.equal(p.h, 477);
+  g.width = 709; g.htmlPage(tab, '<p>hi', cx); await settle();
+  assert.equal(execs.filter(e => e[0] === 'sh').length, 1, 'same 20px step: cached');
+});
+
+test('while a new width renders, the last page stands in; one render runs at a time', async () => {
+  const { g, cx, execs, settle } = htmlGroup(), tab = { path: '/x/c.html', on: null };
+  g.width = 700; g.htmlPage(tab, 'a', cx); await settle();
+  const first = g.htmlPage(tab, 'a', cx);
+  g.width = 900;
+  const during = g.htmlPage(tab, 'a', cx);
+  g.width = 1100;
+  assert.equal(g.htmlPage(tab, 'a', cx), first, 'stale page shown, scaled by the view');
+  assert.equal(during, first);
+  await settle();
+  assert.equal(execs.filter(e => e[0] === 'sh').length, 2, 'the 1100 request waited for the 900 render');
+  g.htmlPage(tab, 'a', cx); await settle();
+  assert.equal(execs.filter(e => e[0] === 'sh').length, 3);
+});
+
+test('a remote HTML file is copied locally before rendering', async () => {
+  const { g, cx, execs, writes, settle } = htmlGroup(), tab = { path: '/home/s/curve.html', on: 'devbox' };
+  g.width = 700; g.htmlPage(tab, '<p>remote', cx); await settle();
+  assert.equal(writes.length, 1); assert.match(writes[0], /^\/app\/data\/ide-html\/\w+\.html$/);
+  assert.equal(execs.find(e => e[0] === 'sh').at(-4), writes[0]);
+});
+
+test('a failed render shows Chrome\'s error', async () => {
+  const { g, cx, settle, reply } = htmlGroup(), tab = { path: '/x/c.html', on: null };
+  reply({ code: 1, stdout: '', stderr: 'HTML preview needs @mermaid-js/mermaid-cli\n' });
+  g.width = 700; g.htmlPage(tab, 'x', cx); await settle();
+  const p = g.htmlPage(tab, 'x', cx);
+  assert.equal(p.state, 'error'); assert.match(p.error, /mermaid-cli/);
+});

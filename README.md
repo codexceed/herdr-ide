@@ -1,7 +1,7 @@
 # herdr-ide
 
 A [Herdr](https://herdr.dev) layout for running agent swarms: file tabs in split editor
-panes, VSCode-style markdown preview with mermaid diagrams, and each Claude Code / Codex
+panes, VSCode-style markdown preview with mermaid diagrams and HTML preview, and each Claude Code / Codex
 session's running subagents as a live tree in the agents sidebar.
 
 ![herdr-ide](preview.png)
@@ -44,10 +44,12 @@ folder that no other terminal shows. For a match that never guesses, add this to
 
 ### What it touches
 
-No network access. The mods run local programs and read outside their folder:
+No network access of their own (an HTML preview loads whatever the page itself links to).
+The mods run local programs and read outside their folder:
 
 - `ide-editor` reads the files you open and runs `mmdc` + `sips` to render diagrams into
-  `~/.config/herdr-app/data/ide-mermaid/`.
+  `~/.config/herdr-app/data/ide-mermaid/`, and `node` + headless Chrome (mermaid-cli's
+  puppeteer) to render HTML previews into `~/.config/herdr-app/data/ide-html/`.
 - `ide-files` runs `sh` to list folders and `git status` for change marks.
 - `ide-open` runs `git ls-files` (outside a repo `rg --files` or `find`), `hc read` on the
   tab's terminals, and `sh` to check which printed paths exist.
@@ -62,7 +64,7 @@ No network access. The mods run local programs and read outside their folder:
 | Go to a file | ⌘P: fuzzy-find in the terminal's git repo; with no query it lists files the tab's terminals printed (⌘P, Enter opens what an agent just mentioned); `/…` or `~/…` opens any path. Herdr's tab picker moves to ⌥⌘P |
 | Files side by side | ⌘\\ or the split button in an editor pane |
 | Close a file tab | × , middle-click, or ⌘W in the editor pane |
-| Markdown preview ⇄ source | ⌘⇧V or the `</>` button |
+| Markdown or HTML preview ⇄ source | ⌘⇧V or the `</>` button |
 | Find in a terminal | ⌘F: Herdr's find bar searches the screen and history, highlights each hit and scrolls to it; Enter / Shift-Enter or its arrows step |
 | Find in a file | ⌘F in an editor pane: the header turns into a find bar listing every match; ↑↓ steps, Enter copies the line, Esc closes |
 | Split terminals / agents | ⌘D (right), ⌘⇧D (down) |
