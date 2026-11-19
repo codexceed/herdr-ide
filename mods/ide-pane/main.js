@@ -9,7 +9,7 @@
 // Props from the app: { pane, terminal }.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, InputState, Input } from "gpui-base";
-import { panes, props, run, theme, home, readTextFile, shared, setShared, nextCommand, notify } from "herdr";
+import { panes, terminals, props, run, theme, home, readTextFile, shared, setShared, nextCommand, notify } from "herdr";
 
 const FIND = "ide-find", SHOWN = 300, BEFORE = 40;
 const keyOf = t => `${t.on ?? ""}:${t.path}`;
@@ -29,6 +29,16 @@ function folder(cwd) {
 // color the sidebar's dots use: a tint and a 2px edge ({ edge, tint }, else null). Herdr's
 // pane frame has no per-status border, so the header is the part of the pane a mod can light.
 const GLOW = "2e"; // the tint: the color at 0x2e / 255 ≈ 18%
+// The color picked for this pane's agent in the agents sidebar (ide-agents keeps it as the
+// terminal label `herdr-ide.color`) fills the header's right side, fading in from the left:
+// Herdr draws one pane border for the whole layout, so a mod can't color the pane's outline.
+// An element takes only solid colors, so the fade is FADE strips of rising alpha, inset from
+// the header's edges so it never crosses the pane's rounded border.
+// The alpha eases in (CURVE > 1) so the color is strong toward the right edge, as vivid as the
+// sidebar row's border, and faint where it meets the header's text.
+const LABEL = "herdr-ide.color", FADE = 48, PEAK = 0xe6, CURVE = 1.8; // PEAK ≈ 90%
+const fade = hex => Array.from({ length: FADE }, (_, i) =>
+  hex + Math.round(PEAK * ((i + 1) / FADE) ** CURVE).toString(16).padStart(2, "0"));
 const glow = (t, status) => (status === "done" || status === "blocked") && t[status]
   ? { edge: t[status], tint: t[status].slice(0, 7) + GLOW } : null;
 
@@ -220,8 +230,13 @@ export default class Pane extends View {
     const st = p.status;
     const pane = p.pane;
     const lit = glow(t, st);
+    const hue = /^#[0-9a-f]{6}$/i.test(terminals().find(x => x.address === p.terminal)?.labels?.[LABEL] ?? "")
+      ? terminals().find(x => x.address === p.terminal).labels[LABEL] : null;
     return h_flex()
       .id(`pane-head-${pane}`)
+      .relative()
+      .when(Boolean(hue), el => el.child(h_flex().absolute().top(3).bottom(3).right(4).w("36%").rounded_r(7).overflow_hidden()
+        .children(fade(hue).map((c, i) => div().flex_1().h_full().bg(c).when(i === FADE - 1, s => s.rounded_r(7))))))
       .size_full()
       .px(10)
       .gap(8)

@@ -3,8 +3,8 @@
 // ide-agents: Claude Code / Codex in-process subagents (swarm.py) show as children too.
 
 import { View, div, image, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, exec, appHome } from "herdr";
+import { v_flex, h_flex, HoverCard } from "gpui-base";
+import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, exec, appHome, hc, commands, notify } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -64,20 +64,55 @@ const sortOf = () => SORTS.find((s) => s.id === shared("agents.sort")) ?? SORTS[
 const SECTION = { 4: "Needs you", 3: "Done", 2: "Working", 1: "Idle" };
 const SECTION_STATUS = { 4: "blocked", 3: "done", 2: "working" };
 
-// Tab colors picked from a row's right-click menu: shared("ide-agents.tab-colors") =
-// { [tab]: "#rrggbb" }. Every row has a border: soft white, or its tab's color at half
-// strength. The focused row stands out from all of them: full-strength border, a tinted
+// Agent colors picked from a row's right-click menu, one per agent session (so agents sharing
+// a tab can differ), kept as a herdr-core label on its terminal: `herdr-ide.color=#rrggbb`.
+// Like Herdr's own pins (`herdr.pinned`), the label follows the session across pane moves and
+// Herdr clients and ends with it. The pane's header (ide-pane) shows the same color. Every row
+// has a border: soft white, or its color at half strength. The focused row stands out from all of them: full-strength border, a tinted
 // fill and a halo (two soft rings of the same color). Each swatch stands out on a dark
 // sidebar (>= 3:1) and keeps white and gray text readable on its tint
 // (tests/agents.test.cjs checks both).
-const TAB_COLORS = "ide-agents.tab-colors";
+export const LABEL = "herdr-ide.color";
+const LEGACY = ["ide-agents.tab-colors", "ide-agents.pane-colors"]; // shared state before labels
+
+// An agent's color from its terminal's labels: a swatch, else null (a hand-set label that isn't
+// one of SWATCHES is ignored, so every color shown keeps the contrast the tests promise).
+export function colorFrom(labels) {
+  const hex = labels?.[LABEL];
+  return SWATCHES.some(s => s.hex === hex) ? hex : null;
+}
+
+// Labels to write for colors kept in shared state before (v0.7: by tab; then by pane):
+// [[terminal, hex]] for agents that have none yet. A pane's color beats its tab's.
+export function legacyLabels(agents, tabColors, paneColors, labelsOf) {
+  return agents.filter(a => !colorFrom(labelsOf(a.address)))
+    .map(a => [a.address, paneColors?.[a.pane] ?? tabColors?.[a.tab]])
+    .filter(([, hex]) => SWATCHES.some(s => s.hex === hex));
+}
+
+// The shared-state colors still to move: an entry goes only once at least one of its agents is
+// listed and every listed one has its label (`labeled(agent)`). A failed write, or an agent not
+// listed yet (its machine away), keeps the entry for the next try. Returns [tabColors, paneColors],
+// null when empty. Tab and pane ids aren't reused, so an entry for a closed one is inert.
+export function unmovedLegacy(tabColors, paneColors, agents, labeled) {
+  const keep = (colors, key) => {
+    const left = Object.fromEntries(Object.entries(colors ?? {}).filter(([id]) => {
+      const mine = agents.filter(a => a[key] === id);
+      return !mine.length || !mine.every(labeled);
+    }));
+    return Object.keys(left).length ? left : null;
+  };
+  return [keep(tabColors, "tab"), keep(paneColors, "pane")];
+}
+const RETRY = 30000; // ms between tries to move colors that didn't make it
+
 export const SWATCHES = [
   { name: "Red", hex: "#e06c75" }, { name: "Orange", hex: "#e5904f" }, { name: "Amber", hex: "#d9b44a" },
   { name: "Green", hex: "#5fb878" }, { name: "Teal", hex: "#3fb5a8" }, { name: "Blue", hex: "#5b9cf0" },
   { name: "Violet", hex: "#9a86f0" }, { name: "Pink", hex: "#d97bb0" }, { name: "Slate", hex: "#8b95a5" },
 ];
 export const TINT = "24"; // the focused row's tint: the color at 0x24 / 255 ≈ 14%
-const PLAIN = "#ffffff"; // a row without a tab color
+const PLAIN = "#ffffff"; // a row without a color
 const QUIET = { [PLAIN]: "4d", other: "80" }; // an unfocused row's border alpha: 30% white, 50% color
 const HALO = ["40", "1a"]; // the focused row's rings, inner then outer: 25% and 10%
 const GAP = 2; // px above and below each row
@@ -104,11 +139,6 @@ export function byTab(members) {
 // The list's right padding: the scrollbar is drawn over the content, so rows end before it.
 const SCROLLBAR = 18;
 
-export function withColor(colors, tab, hex, live) {
-  const next = Object.fromEntries(Object.entries(colors ?? {}).filter(([id, c]) => live.has(id) && SWATCHES.some(s => s.hex === c)));
-  if (hex) next[tab] = hex; else delete next[tab];
-  return next;
-}
 
 function duration(ms) {
   const m = Math.floor(ms / 60000);
@@ -324,25 +354,28 @@ export default class Agents extends View {
 
   openTabMenu(a, name) {
     if (!a.tab) return;
-    openOverlay({ mod: "ide-agents", kind: "popup", width: 220, height: 172, props: { tabMenu: { tab: a.tab, name } } });
+    openOverlay({ mod: "ide-agents", kind: "popup", width: 220, height: 172, props: { tabMenu: { tab: a.tab, pane: a.pane, terminal: a.address, name } } });
   }
 
-  // Rename asks the person for the name (tab.rename without one); the row follows the tab's name.
-  renameTab(tab) {
+  // Rename asks the person for the name. With Herdr's pane.rename (after 0.1.16) it names this
+  // agent's pane alone; before that, tab.rename names the tab, every agent in it included.
+  renameTab(tab, pane) {
     closeOverlay(props().overlay);
-    run("tab.rename", { id: tab });
+    if (pane && commands().some(c => c.name === "pane.rename")) run("pane.rename", { pane });
+    else run("tab.rename", { id: tab });
   }
 
-  colorTab(tab, hex) {
-    const live = new Set(spaces().flatMap(s => s.tabs ?? []).map(x => x.id));
-    const next = withColor(shared(TAB_COLORS), tab, hex, live);
-    setShared(TAB_COLORS, Object.keys(next).length ? next : null);
+  colorAgent(terminal, hex) {
     closeOverlay(props().overlay);
+    hc(["label", terminal, `${LABEL}=${hex ?? ""}`]).then(r => {
+      if (r.code !== 0) notify({ title: "Couldn't set the color", body: r.stderr.trim(), level: "error" });
+    });
   }
 
   tabMenu(t) {
-    const { tab, name } = props().tabMenu;
-    const on = (shared(TAB_COLORS) ?? {})[tab] ?? null;
+    const { tab, pane, terminal, name } = props().tabMenu;
+    const on = colorFrom(terminals().find(x => x.address === terminal)?.labels);
+    const perPane = Boolean(pane) && commands().some(c => c.name === "pane.rename");
     const swatch = (id, hex, label, el) => div()
       .id(`tab-color-${id}`)
       .size(20)
@@ -354,7 +387,7 @@ export default class Agents extends View {
       .cursor_pointer()
       .tooltip(label)
       .when(on === hex, s => s.border_2().border_color(t.foreground))
-      .on_click(() => this.colorTab(tab, hex))
+      .on_click(() => this.colorAgent(terminal, hex))
       .child(el);
     return v_flex()
       .w_full()
@@ -371,9 +404,9 @@ export default class Agents extends View {
         .items_center()
         .text_color(t.foreground)
         .hover((el) => el.bg(t.hover))
-        .on_click(() => this.renameTab(tab))
+        .on_click(() => this.renameTab(tab, pane))
         .child(svg("mods/workspace-chrome/square-pen.svg").size(14).flex_none().text_color(t.muted))
-        .child(div().flex_1().child("Rename tab")))
+        .child(div().flex_1().child(perPane ? "Rename" : "Rename tab")))
       .child(div().px(8).pt(6).pb(6).text_size(11).text_color(t.dim).child("Color"))
       .child(h_flex().flex_wrap().gap(7).px(8)
         .children(SWATCHES.map(s => swatch(s.name.toLowerCase(), s.hex, s.name,
@@ -531,9 +564,24 @@ export default class Agents extends View {
     // agent's own title, never an automatic tab number unless two rows would
     // otherwise read the same.
     const tabs = spaces().flatMap(s => s.tabs);
-    const tabColors = shared(TAB_COLORS) ?? {};
-    // A row's border: its tab color (else white), full strength only on the focused row.
-    const colorOf = a => tabColors[a.tab] ?? PLAIN;
+    const labelsOf = address => all.find(x => x.address === address)?.labels;
+    // Colors kept in shared state before labels move onto their terminals. Only entries whose
+    // labels were written leave shared state; the rest are tried again after RETRY.
+    if (!this.moving && list.length && LEGACY.some(k => shared(k)) && Date.now() - (this.movedAt ?? 0) > RETRY) {
+      this.moving = true;
+      this.movedAt = Date.now();
+      const agentsNow = list;
+      Promise.all(legacyLabels(agentsNow, shared(LEGACY[0]), shared(LEGACY[1]), labelsOf)
+        .map(([address, hex]) => hc(["label", address, `${LABEL}=${hex}`]).then(r => (r.code === 0 ? address : null), () => null)))
+        .then(done => {
+          const written = new Set(done.filter(Boolean));
+          const labeled = a => written.has(a.address) || Boolean(colorFrom(labelsOf(a.address)));
+          unmovedLegacy(shared(LEGACY[0]), shared(LEGACY[1]), agentsNow, labeled).forEach((left, i) => setShared(LEGACY[i], left));
+        })
+        .finally(() => { this.moving = false; });
+    }
+    // A row's border: its agent's color (else white), full strength only on the focused row.
+    const colorOf = a => colorFrom(labelsOf(a.address)) ?? PLAIN;
     const colored = (el, a) => {
       const hex = colorOf(a);
       return el.on_mouse_down("right", () => this.openTabMenu(a, label(a)))
@@ -558,24 +606,41 @@ export default class Agents extends View {
       if (detail.get(a.address) == null && seen[`${a.space_name}\u0000`] > 1) detail.set(a.address, label(a));
     }
 
-    const row = (a, i, subs = []) => {
+    // `rail`: the collapsed sidebar's cell. `id`: the row's id prefix (a hover card's copy differs).
+    const row = (a, i, subs = [], rail = collapsed, id = "ag") => {
       const pic = icon(a.program, 16, t.foreground);
       const more = detail.get(a.address);
       // An agent on another machine (`vps/t7`) says which.
       const machine = a.address.includes("/") ? a.address.split("/")[0] : null;
-      if (collapsed) {
-        return h_flex()
+      if (rail) {
+        // The agent's icon and status; resting the pointer on it opens the full row (and its
+        // sub-agents) in a card beside the rail, clickable like the list itself.
+        const cell = h_flex()
           .id(`ag-${a.address}`)
           .map(el => colored(el, a))
-          .h(26)
-          .px(8)
+          .h(30)
+          .px(6)
           .flex_none()
           .items_center()
-          .gap(4)
+          .justify_center()
+          .gap(6)
           .hover((s) => s.bg(t.hover))
           .on_click(() => run("pane.focus", { pane: a.pane }))
-          .child(div().flex_1().min_w(0).whitespace_nowrap().text_right().text_color(t.muted).child(String(i + 1)))
-          .child(h_flex().w(14).flex_none().items_center().justify_center().child(this.status(t, a, true)))
+          .child(pic ?? div().text_color(t.muted).child(String(i + 1)))
+          .child(h_flex().w(14).flex_none().items_center().justify_center().child(this.status(t, a, true)));
+        const kids = this.tree(all, a.address);
+        const card = v_flex()
+          .w(280)
+          .p(6)
+          .rounded(10)
+          .bg(t.popover)
+          .border_1()
+          .border_color(t.border)
+          .shadow_md()
+          .text_size(13)
+          .child(row(a, i, kids, false, "card"))
+          .children(kids.map((s) => this.subRow(t, s, shown, false, colorOf(a))));
+        return HoverCard.new(`ag-card-${a.address}`).anchor("left_center").open_delay(250).trigger(cell).content(card);
       }
       const when = this.since(a);
       const idle = a.status === "idle" && !a.focused;
@@ -601,12 +666,13 @@ export default class Agents extends View {
       // Without a space header above (priority, pinned) the row names its space.
       const full = byPriority || isPinned;
       // A row always has a name; with none at all, its machine stands in.
-      const name = (full ? a.space_name || label(a) : more || (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a)))
+      // A pane someone named (pane.rename, after Herdr 0.1.16) reads as that name.
+      const name = a.pane_name || (full ? a.space_name || label(a) : more || (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a)))
         || machine || a.program?.name || "";
       // An agent on another machine: a second line under the name says which.
       const remote = Boolean(machine) && name !== machine;
       return halo(a, h_flex()
-        .id(`ag-${a.address}`)
+        .id(`${id}-${a.address}`)
         .map(el => colored(el, a))
         .px(8)
         .h(remote ? 42 : 30)
@@ -691,7 +757,7 @@ export default class Agents extends View {
           .when(!byPriority && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true)))
           .child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim)));
     };
-    // Agents in one tab (a split view): a dashed box in the tab's color around their rows, headed
+    // Agents in one tab (a split view): a soft white dashed box around their rows (each keeps its own color), headed
     // by a split-panes icon and how many share the screen. Sub-agents keep their tree lines.
     const tabBox = (run) => v_flex()
       .id(`tab-box-${run[0].tab}`)
@@ -702,7 +768,7 @@ export default class Agents extends View {
       .rounded(12)
       .border(1)
       .border_dashed()
-      .border_color(quiet(colorOf(run[0])))
+      .border_color(quiet(PLAIN))
       .child(h_flex().h(20).px(3).gap(5).items_center().text_size(10.5).text_color(t.dim)
         .child(svg("mods/workspace-chrome/panel-right.svg").size(11).flex_none())
         .child(div().child(`${run.length} panes, one view`)))

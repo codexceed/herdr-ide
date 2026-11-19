@@ -10,16 +10,18 @@ const source = fs.readFileSync(path.join(__dirname, '../mods/ide-agents/main.js'
 
 // The mod with stubbed Herdr; `state` records what it asked Herdr to do.
 function load() {
-  const state = { shared: {}, calls: [], closed: [], props: {} };
+  const state = { shared: {}, calls: [], closed: [], props: {}, hc: [], commands: [{ name: 'tab.rename' }] };
   const element = new Proxy({}, { get: () => () => element });
   const sandbox = {
     View: class {}, div: () => element, svg: () => element, image: () => element, v_flex: () => element, h_flex: () => element,
     props: () => state.props, run: (command, args) => state.calls.push({ command, args }),
     shared: key => state.shared[key], setShared: (key, value) => { state.shared[key] = value; },
     closeOverlay: id => state.closed.push(id), openOverlay: o => state.calls.push({ overlay: o }),
-    spaces: () => [{ tabs: [{ id: 'tab-a' }, { id: 'tab-b' }] }], theme: () => ({}),
+    spaces: () => [{ tabs: [{ id: 'tab-a' }, { id: 'tab-b' }] }], panes: () => [{ pane: 'p1' }, { pane: 'p2' }], theme: () => ({}),
+    terminals: () => [], commands: () => state.commands, notify() {},
+    hc: args => { state.hc.push(args.join(' ')); return Promise.resolve({ code: 0, stdout: '', stderr: '' }); },
   };
-  const mod = vm.runInNewContext(source + '\n({ Agents, SWATCHES, TINT, withColor, mix, byTab });', sandbox);
+  const mod = vm.runInNewContext(source + '\n({ Agents, SWATCHES, TINT, mix, byTab, colorFrom, legacyLabels, unmovedLegacy, LABEL });', sandbox);
   return { state, ...mod };
 }
 
@@ -45,27 +47,27 @@ test('every swatch stands out on a dark sidebar and keeps white and gray text re
   }
 });
 
-test('a color is set and cleared per tab; gone tabs and unknown colors are dropped', () => {
-  const { withColor, SWATCHES } = load();
-  const live = new Set(['tab-a', 'tab-b']), red = SWATCHES[0].hex, blue = SWATCHES[5].hex;
-  const set = withColor({ 'tab-b': blue, gone: red, 'tab-a': '#123456' }, 'tab-a', red, live);
-  assert.equal(JSON.stringify(set), JSON.stringify({ 'tab-b': blue, 'tab-a': red }));
-  assert.equal(JSON.stringify(withColor(set, 'tab-a', null, live)), JSON.stringify({ 'tab-b': blue }));
+test('a color comes from the terminal label, and only a swatch counts', () => {
+  const { colorFrom, SWATCHES, LABEL } = load();
+  assert.equal(colorFrom({ [LABEL]: SWATCHES[0].hex }), SWATCHES[0].hex);
+  for (const labels of [{ [LABEL]: '#123456' }, { [LABEL]: '' }, {}, undefined]) assert.equal(colorFrom(labels), null);
 });
 
-test('the tab menu colors its tab, renames through Herdr and closes', () => {
+test('the row menu labels its agent\'s terminal, renames through Herdr and closes', () => {
   const { state, Agents, SWATCHES } = load();
-  state.props = { overlay: 'o1', tabMenu: { tab: 'tab-a', name: 'fix login' } };
+  state.props = { overlay: 'o1', tabMenu: { tab: 'tab-a', pane: 'p1', terminal: 'box/t7', name: 'fix login' } };
   const menu = new Agents();
   menu.init({}, {});
   assert.doesNotThrow(() => menu.render({}));
-  menu.colorTab('tab-a', SWATCHES[2].hex);
-  assert.equal(state.shared['ide-agents.tab-colors']['tab-a'], SWATCHES[2].hex);
-  menu.colorTab('tab-a', null);
-  assert.equal(state.shared['ide-agents.tab-colors'], null);
-  menu.renameTab('tab-a');
+  menu.colorAgent('box/t7', SWATCHES[2].hex);
+  menu.colorAgent('box/t7', null);
+  assert.equal(JSON.stringify(state.hc), JSON.stringify([`label box/t7 herdr-ide.color=${SWATCHES[2].hex}`, 'label box/t7 herdr-ide.color=']));
+  menu.renameTab('tab-a', 'p1');
   assert.equal(JSON.stringify(state.calls.at(-1)), '{"command":"tab.rename","args":{"id":"tab-a"}}');
-  assert.deepEqual(state.closed, ['o1', 'o1', 'o1']);
+  state.commands.push({ name: 'pane.rename' }); // Herdr after 0.1.16
+  menu.renameTab('tab-a', 'p1');
+  assert.equal(JSON.stringify(state.calls.at(-1)), '{"command":"pane.rename","args":{"pane":"p1"}}');
+  assert.equal(state.closed.length, 4);
 });
 
 test('the focused row\'s fill is an opaque mix, so its halo can\'t show through', () => {
@@ -89,4 +91,26 @@ test('agents sharing one screen group into runs; a tab seen again later starts a
   const { byTab } = load();
   const runs = byTab([{ tab: 'a' }, { tab: 'a' }, { tab: 'a' }, { tab: 'b' }, { tab: null }, { tab: null }, { tab: 'a' }]);
   assert.equal(JSON.stringify(runs.map(r => r.length)), '[3,1,1,1,1]');
+});
+
+test('colors kept in shared state before move onto terminals without overwriting a label', () => {
+  const { legacyLabels, LABEL } = load();
+  const red = '#e06c75', blue = '#5b9cf0';
+  const agents = [{ address: 't1', tab: 'A', pane: 'p1' }, { address: 't2', tab: 'A', pane: 'p2' },
+    { address: 't3', tab: 'B', pane: 'p3' }, { address: 't4', tab: 'A', pane: 'p4' }];
+  const labelsOf = a => (a === 't4' ? { [LABEL]: blue } : {});
+  const moved = legacyLabels(agents, { A: red }, { p2: blue, p3: '#123456' }, labelsOf);
+  assert.equal(JSON.stringify(moved), JSON.stringify([['t1', red], ['t2', blue]]));
+});
+test('a legacy color leaves shared state only once its agents carry the label', () => {
+  const { unmovedLegacy } = load();
+  const red = '#e06c75', blue = '#5b9cf0';
+  const agents = [{ address: 't1', tab: 'A', pane: 'p1' }, { address: 't2', tab: 'A', pane: 'p2' }, { address: 't3', tab: 'B', pane: 'p3' }];
+  // t2's write failed: tab A stays; tab B is done; tab C has no agent listed yet (machine away): stays.
+  const labeled = a => a.address !== 't2';
+  const [tabs, panes] = unmovedLegacy({ A: red, B: blue, C: red }, { p3: blue, p9: red }, agents, labeled);
+  assert.equal(JSON.stringify(tabs), JSON.stringify({ A: red, C: red }));
+  assert.equal(JSON.stringify(panes), JSON.stringify({ p9: red }));
+  // Every write made: nothing left.
+  assert.equal(JSON.stringify(unmovedLegacy({ A: red }, { p1: blue }, agents, () => true)), '[null,null]');
 });

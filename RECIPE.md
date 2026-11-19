@@ -25,19 +25,24 @@ Left to right, the same frame as Herdr's `main` layout:
     plain group. Under each Claude Code / Codex agent,
     its running subagents as tree rows (26px, 12.5px text, `├`/`└` lines in the theme's
     `input` color): the subagent's task, how long it has run (`2m`), and a spinner.
-    Right-clicking an agent row opens its tab's menu: **Rename tab** (`tab.rename`, which
-    asks for the name; the row shows the tab's name) and nine colors plus none. Rows sit 4px apart (2px
-    margin each). Every row has a 1.5px border (2px when focused): white at 30%, or its tab's color at 50%. The focused row gets the border
+    Right-clicking an agent row opens its menu: **Rename tab** (`tab.rename`, which asks for
+    the name; the row shows the tab's name), or **Rename** (`pane.rename`, this agent's pane
+    alone; the row shows `pane_name`) once Herdr has it (after 0.1.16), and nine colors plus
+    none. The color is the agent session's own, so agents sharing a tab can differ. Rows sit 4px apart (2px
+    margin each). Every row has a 1.5px border (2px when focused): white at 30%, or its color at 50%. The focused row gets the border
     at full strength, an opaque fill (the color at 14% over `chrome`, white at 9% for an
     uncolored tab) and a halo: two rings of the color at 25% and 10%, drawn with a
     negative margin so the rows around it don't move.
     An agent on another machine gets a 42px row: its name, then the machine under it
     (10.5px, `dim`, after the shipped `monitor` icon); both truncate.
-    Sub-agent rows take their parent tab's color: a 1.5px border and tree lines at the
+    Sub-agent rows take their parent agent's color: a 1.5px border and tree lines at the
     parent's unfocused strength.
     Agents that share one screen (neighbours in the same tab, `byTab()`) sit in a dashed
-    box in the tab's color, headed by a split-panes icon and "N panes, one view"; the
+    soft white box (each row keeps its own color), headed by a split-panes icon and "N panes, one view"; the
     list keeps an 18px right gutter so the scrollbar, drawn over the content, misses the rows.
+    Collapsed to the rail (sidebar under 160px), each agent is its icon and status in its
+    tab's border; resting the pointer on one for 250ms opens a `HoverCard` beside it with the
+    full row and its sub-agents, clickable like the list.
   - **Footer** (`ide-chrome` with `{footer: true}`): Settings, Add machine.
 - **Work area**: the shipped tab bar, then the active tab's panes as cards with the
   pane header (`ide-pane`: the shipped `pane` header plus find). Panes can be terminals,
@@ -119,9 +124,17 @@ Left to right, the same frame as Herdr's `main` layout:
   `TextView.markdown`, `image()`, `readTextFile`, `exec`. Mermaid: `sh -c` runs
   `mmdc -t dark|default -b transparent -s 2` into
   `~/.config/herdr-app/data/ide-mermaid/<hash>.png`, then `sips` for its size.
-- `ide-agents` tab colors: `shared("ide-agents.tab-colors")` = `{[tab]: "#rrggbb"}`,
-  written by the row menu (the mod opened as a popup with `props.tabMenu`), pruned of
-  closed tabs on each write. `SWATCHES` holds only colors that stand out on a dark
+- `ide-agents` colors: the herdr-core terminal label `herdr-ide.color=#rrggbb`, written by the
+  row menu (the mod opened as a popup with `props.tabMenu`) with `hc label` and read from
+  `terminals()[i].labels`. Like Herdr's pins (`herdr.pinned`) it follows the session across
+  pane moves and clients and ends with it. A label that isn't a swatch is ignored
+  (`colorFrom()`). Colors from v0.7 (`shared("ide-agents.tab-colors")`, by tab) move onto
+  their terminals (`legacyLabels()`); an entry leaves shared state only once its listed agents
+  carry the label (`unmovedLegacy()`), so a failed write or an agent on a machine that's away
+  is tried again (every 30 s) instead of lost.
+  `ide-pane` fills the right 36% of the pane header with the same color, easing in from the
+  left to 90% at the edge (48 strips of rising alpha, `alpha ∝ x^1.8`: an element takes only
+  solid colors), inset 3–4px so it stays inside the pane's rounded border. `SWATCHES` holds only colors that stand out on a dark
   sidebar (≥ 3:1) and keep white and gray text readable on their tint;
   `tests/agents.test.cjs` checks both.
 - `ide-agents`: the shipped `agents` mod plus `swarmKids()` / `swarmRow()`. Every 3 s it
