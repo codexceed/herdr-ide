@@ -38,7 +38,7 @@ export function blocks(md) {
     first ??= line;
     const f = opens(line);
     if (f) { fence = f; continue; }
-    if (/^ {0,3}<!--/.test(line) && !/-->/.test(line)) raw = /-->/;
+    if (/^ {0,3}<!--/.test(line) && !/--!?>/.test(line)) raw = /--!?>/;
     else {
       const tag = line.match(/^ {0,3}<(pre|script|style|textarea)\b/i);
       if (tag && !new RegExp(`</${tag[1]}>`, "i").test(line)) raw = new RegExp(`</${tag[1]}>`, "i");

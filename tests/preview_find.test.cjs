@@ -72,3 +72,7 @@ test('reference links show their text; definitions show nothing', () => {
   assert.equal(page.slice(a, b), 'the guide');
   assert.match(shown(page).text, /\[not a ref\] stays\./);
 });
+
+test('an HTML comment may also end with --!>', () => {
+  assert.equal([...blocks('<!--\n\nhidden\n--!>\n\nafter')].length, 2);
+});
