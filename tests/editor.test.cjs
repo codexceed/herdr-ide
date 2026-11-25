@@ -26,14 +26,14 @@ function harness() {
   };
   const source = SHEET + fs.readFileSync(path.join(__dirname, '../mods/ide-editor/main.js'), 'utf8')
     .replace(/^import .*;\n/gm, '').replace('export default class EditorGroup', 'class EditorGroup');
-  const { EditorGroup: Group, mermaidError } = vm.runInNewContext(source + '\n({ EditorGroup, mermaidError });', sandbox);
+  const { EditorGroup: Group, mermaidError, parts, imagePath, IMG } = vm.runInNewContext(source + '\n({ EditorGroup, mermaidError, parts, imagePath, IMG });', sandbox);
   const context = { focus_handle: () => ({ focus() {}, is_focused: () => false }), spawn() {}, timer: { every() {} }, notify() {} };
   function attach(id) { state.group = id; const g = new Group(); g.init({}, context); return g; }
   function group(id, pane) {
     state.groups[id] = { tabs: [], preview: [], pane, tab: 'tab' };
     return attach(id);
   }
-  return { state, group, attach, context, mermaidError };
+  return { state, group, attach, context, mermaidError, parts, imagePath, IMG };
 }
 
 test('restored background groups keep their own pane and split there after Files activation', () => {
@@ -274,3 +274,60 @@ test('a failed remote copy shows as a preview error too', async () => {
   assert.equal(p.state, 'error'); assert.match(p.error, /No space/);
 });
 
+// Image blocks: TextView draws none, so the preview splits them out and draws each with image().
+const PAGE = [
+  '# Roles', '',
+  '<picture>',
+  '  <source media="(prefers-color-scheme: dark)" srcset="references/roles-dark.svg">',
+  '  <img alt="The roles" src="references/roles-light.svg">',
+  '</picture>', '',
+  'Text ![inline](a.png) stays in the paragraph.',
+  '![Diagram](<img/a b.png> "title")',
+  '![Remote](https://x.invalid/a.png)',
+  '```md', '![in a fence](skip.png)', '```',
+  '```mermaid', 'graph TD; A-->B', '```',
+].join('\n');
+
+test('image blocks split out of the Markdown, and <picture> follows the theme', () => {
+  const { parts } = harness();
+  const kinds = ps => [...ps].map(p => p.image ?? (p.mermaid !== undefined ? 'mermaid' : 'md'));
+  assert.deepEqual(kinds(parts(PAGE, true)), ['md', 'references/roles-dark.svg', 'md', 'img/a b.png', 'md', 'mermaid']);
+  assert.deepEqual(kinds(parts(PAGE, false)), ['md', 'references/roles-light.svg', 'md', 'img/a b.png', 'md', 'mermaid']);
+  const ps = parts(PAGE, true);
+  assert.equal(ps[1].alt, 'The roles');
+  assert.match(ps[2].md, /!\[inline\]\(a\.png\)/); // inline images stay Markdown
+  assert.match(ps[4].md, /https:\/\/x\.invalid/); // URLs stay Markdown
+  assert.match(ps[4].md, /in a fence/); // so do images inside code
+  assert.equal(parts(PAGE, true).map(p => p.md ?? '').join('').includes('<picture>'), false);
+});
+
+test('image paths resolve against the page folder', () => {
+  const { imagePath } = harness();
+  assert.equal(imagePath('/r/skill/SKILL.md', 'references/x.svg'), '/r/skill/references/x.svg');
+  assert.equal(imagePath('/r/skill/SKILL.md', './../img/./x.png'), '/r/img/x.png');
+  assert.equal(imagePath('/r/skill/SKILL.md', '/abs/x.png'), '/abs/x.png');
+});
+
+// The copy script, run for real by sh; a fake hc stands in for `hc exec --on box cat`.
+test('images are copied from this machine or through hc, then sized', () => {
+  const { execFileSync } = require('node:child_process');
+  const os = require('node:os');
+  const { IMG } = harness();
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'img-')), bin = path.join(tmp, 'bin'), out = path.join(tmp, 'out');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'hc'), '#!/bin/sh\n[ "$1 $2 $3" = "exec --on box" ] || exit 9\nshift 7; exec cat -- "$@"\n', { mode: 0o755 });
+  const svgFile = path.join(tmp, 'Roles.SVG');
+  fs.writeFileSync(svgFile, '<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"\n  width="1522" height="848" viewBox="0 0 1522 848"></svg>');
+  const sizer = path.join(__dirname, '../mods/ide-editor/image_size.py');
+  const run = on => execFileSync('sh', ['-c', IMG, 'image', on, svgFile, out, sizer],
+    { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' }).trim().split(/\s+/);
+  for (const on of ['', 'box']) {
+    const [name, w, h] = run(on);
+    assert.match(name, /^\d+-\d+\.svg$/);
+    assert.deepEqual([w, h], ['1522', '848']);
+    assert.equal(fs.readFileSync(path.join(out, name), 'utf8'), fs.readFileSync(svgFile, 'utf8'));
+  }
+  assert.throws(() => execFileSync('sh', ['-c', IMG, 'image', '', path.join(tmp, 'missing.png'), out, sizer], { stdio: 'pipe' }));
+  assert.deepEqual(fs.readdirSync(out).filter(f => f.startsWith('.')), []); // no .part left behind
+  fs.rmSync(tmp, { recursive: true });
+});

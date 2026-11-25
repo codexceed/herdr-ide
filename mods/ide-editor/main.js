@@ -35,15 +35,60 @@ if [ ! -s "$2" ]; then tmp="$2.$$.mmd"; printf '%s' "$1" > "$tmp"
   mmdc -q -i "$tmp" -o "$2.$$.png" -t "$3" -b transparent -s ${MERMAID_SCALE} >&2 || { rm -f "$tmp" "$2.$$.png"; exit 1; }
   rm -f "$tmp"; mv "$2.$$.png" "$2"; fi
 sips -g pixelWidth -g pixelHeight "$2" | awk '/pixel/ {print $2}'`;
-const parts = text => {
+// Splits the page into Markdown, ```mermaid blocks and image blocks (a line holding only
+// ![alt](src), <img> or <picture>), which TextView doesn't draw. Other fences stay Markdown.
+const BLOCKS = /^(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)^\1[ \t]*$|^[ \t]*(!\[[^\]\n]*\]\([^)\n]*\)|<picture\b[\s\S]*?<\/picture>|<img\b[^>]*>)[ \t]*$/gim;
+const parts = (text, dark = true) => {
   const out = []; let last = 0;
-  for (const m of text.matchAll(FENCE)) {
+  for (const m of text.matchAll(BLOCKS)) {
+    let part;
+    if (m[1] !== undefined) { if (!/^mermaid\b/i.test(m[2].trim())) continue; part = { mermaid: m[3] }; }
+    else if (!(part = imageOf(m[4], dark))) continue;
     if (m.index > last) out.push({ md: text.slice(last, m.index) });
-    out.push({ mermaid: m[1] }); last = m.index + m[0].length;
+    out.push(part); last = m.index + m[0].length;
   }
   if (last < text.length) out.push({ md: text.slice(last) });
   return out;
 };
+const attr = (tag, name) => {
+  const m = tag.match(new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i"));
+  return m ? m[1] ?? m[2] ?? m[3] : null;
+};
+// { image: src, alt } for one image block, null when it has no file to show (a URL, data: …).
+// <picture> picks its prefers-color-scheme <source> for the theme, else its <img>.
+const imageOf = (block, dark) => {
+  let src, alt = "";
+  const md = block.match(/^!\[([^\]]*)\]\(\s*(?:<([^>]+)>|([^\s)]+))/);
+  if (md) { alt = md[1]; src = md[2] ?? md[3]; }
+  else {
+    const img = block.match(/<img\b[^>]*>/i)?.[0] ?? "";
+    alt = attr(img, "alt") ?? ""; src = attr(img, "src");
+    for (const tag of block.matchAll(/<source\b[^>]*>/gi))
+      if (new RegExp(`prefers-color-scheme\\s*:\\s*${dark ? "dark" : "light"}`, "i").test(attr(tag[0], "media") ?? "")) {
+        src = (attr(tag[0], "srcset") ?? "").split(",")[0].trim().split(/\s+/)[0] || src; break;
+      }
+  }
+  if (!src || /^[a-z][a-z0-9+.-]*:/i.test(src)) return null;
+  try { src = decodeURIComponent(src.replace(/[?#].*$/, "")); } catch { /* keep it as written */ }
+  return src ? { image: src, alt } : null;
+};
+// The image file a page names: relative to the page's folder, then "." and ".." folded.
+const imagePath = (page, src) => {
+  const out = [];
+  for (const seg of (src.startsWith("/") ? src : page.replace(/[^/]*$/, "") + src).split("/"))
+    if (seg === "..") out.pop(); else if (seg !== "." && seg !== "") out.push(seg);
+  return "/" + out.join("/");
+};
+// Copies an image into the app folder ($3), from the page's machine ($1) when that is another one,
+// named by its checksum so a changed file is a new image. image_size.py ($4) prints its name and size.
+const IMG_DIR = "data/ide-images";
+const IMG = `mkdir -p "$3" || exit 1; t="$3/.$$.part"
+if [ -n "$1" ]; then hc=$(command -v hc || echo "$HOME/.local/bin/hc"); "$hc" exec --on "$1" --timeout 120 cat -- "$2" > "$t"
+else cat -- "$2" > "$t"; fi || { rm -f "$t"; exit 1; }
+[ -s "$t" ] || { rm -f "$t"; echo "empty file" >&2; exit 1; }
+ext=$(printf %s "\${2##*/}" | sed -n 's/.*[.]\\([A-Za-z0-9]*\\)$/\\1/p' | tr A-Z a-z)
+n="$(cksum < "$t" | awk '{print $1 "-" $2}').\${ext:-img}"; mv "$t" "$3/$n" && exec python3 -I "$4" "$3/$n"`;
+const images = new Map(); // shared by every group: "on:path:mtime" -> { state, path, w, h, error }
 // mmdc prints the parse error, then a stack trace; keep the error.
 const mermaidError = stderr => {
   const lines = stderr.trim().split("\n"), end = lines.findIndex(l => /^\s*at\s|\(\S+:\d+:\d+\)$/.test(l));
@@ -277,13 +322,43 @@ export default class EditorGroup extends View {
     return d;
   }
 
-  markdownView(k, text, t, cx) {
+  // An image a Markdown page shows, copied into the app folder once per session.
+  picture(tab, src, cx) {
+    const path = imagePath(tab.path, src), key = `${tab.on ?? ""}:${path}`;
+    let p = images.get(key);
+    if (!p) {
+      p = { state: "pending" };
+      images.set(key, p);
+      cx.spawn(async cx => {
+        try {
+          const r = await exec("sh", ["-c", IMG, "image", tab.on ?? "", path, `${appHome()}/${IMG_DIR}`,
+            `${appHome()}/mods/${MOD}/image_size.py`], { timeout: 150000 });
+          const [name, w, h] = r.stdout.trim().split(/\s+/);
+          if (r.code !== 0 || !Number(w) || !Number(h)) throw new Error(r.stderr.trim() || `exit ${r.code}`);
+          Object.assign(p, { state: "ready", path: `${IMG_DIR}/${name}`, w: Number(w), h: Number(h) });
+        } catch (e) { Object.assign(p, { state: "error", error: String(e.message ?? e) }); }
+        finally { cx.notify(); }
+      });
+    }
+    return p;
+  }
+
+  markdownView(k, tab, text, t, cx) {
     const room = Math.max(120, (this.width ?? 600) - 48);
     // Only the focused pane's preview takes the mouse: a drag that ends over another pane never
     // sees its mouse-up, and an unfocused preview would keep selecting on hover.
     const id = `md-${k}-${this.gen}`;
-    return parts(body(text)).map((part, i) => {
+    return parts(body(text), settings().dark !== false).map((part, i) => {
       if (part.md !== undefined) return TextView.markdown(`${id}-${i}`, part.md).selectable(this.here);
+      if (part.image !== undefined) {
+        const p = this.picture(tab, part.image, cx);
+        if (p.state === "ready") {
+          const s = Math.min(1, room / p.w);
+          return div().w_full().py(8).child(image(p.path).w(p.w * s).h(p.h * s));
+        }
+        return div().py(8).text_size(12).text_color(p.state === "error" ? t.ansi1 : t.dim)
+          .child(p.state === "error" ? `Cannot show image ${part.image}: ${p.error}` : `Loading image ${part.image}…`);
+      }
       const d = this.diagram(part.mermaid, cx);
       if (d.state === "ready") {
         const s = Math.min(1, room / d.w);
@@ -467,7 +542,7 @@ export default class EditorGroup extends View {
         : preview
           ? v_flex().id(`eg-md-${k}`).flex_1().min_h(0).overflow_y_scrollbar().px(24).py(16).text_size(14).font_family(PREVIEW_FONT)
               .on_size_change((size, cx) => { if (size.width !== this.width) { this.width = size.width; cx.notify(); } })
-              .children(this.markdownView(k, d.text, t, cx))
+              .children(this.markdownView(k, tab, d.text, t, cx))
           : d?.code ? Editor.new(d.code).flex_1().min_h(0)
           : div().p(12).text_color(t.dim).child(d?.error || "Loading file…"));
   }
