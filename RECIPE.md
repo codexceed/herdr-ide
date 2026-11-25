@@ -55,7 +55,11 @@ Left to right, the same frame as Herdr's `main` layout:
     markdown (24px side padding, 14px text in the system UI font) with diagrams as centered
     images, or an HTML file as a picture of the page at the pane's full width.
 - **Files panel** on the right (`ide-files`, hidden until the tab bar's Files button):
-  the focused pane's folder as a lazy tree with git marks (A / M / D / U).
+  the focused pane's folder as a lazy tree with git marks (A / M / D / U). Right-clicking a
+  file (or an editor tab) opens a 230×108 popup (`ide-files` with `props.fileMenu`):
+  **Download** to `~/Downloads`, or **Download to…** a folder from `pickFolder`. A file on
+  another machine comes over `hc exec --on <machine> cat` (byte-exact, up to 10 minutes),
+  lands as `.part` first, never overwrites (`name (1).ext`), and a toast says where it went.
 - **Go to file** (`ide-open`, ⌘P): a 640px popup hanging 40px from the top, like VS Code's
   Quick Open: a search field, up to 12 rows (file icon, name, then its folder dimmed;
   matched letters in `accent`, a `terminal` / `recent` tag on the right) and a status line

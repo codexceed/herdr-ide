@@ -1,9 +1,11 @@
 // A lazy file browser for the focused pane's folder. Clicking a file opens it as a tab in an
 // editor group (mods/ide-editor): the current Herdr tab's most recently used one, else a new
 // group split to the right of the focused pane.
+// Right-clicking a file (here or on an editor tab) opens this mod as a popup menu
+// (props().fileMenu = { path, on }) to download it to this computer.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState } from "gpui-base";
-import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, shared, setShared, run } from "herdr";
+import { spaces, panes, focused, exec, readTextFile, watchFolder, theme, settings, window, shared, setShared, run, home, props, openOverlay, closeOverlay, notify, pickFolder } from "herdr";
 
 const GROUPS = "ide-editor.groups", ACTIVE = "ide-editor.active";
 function openFile(path, on) {
@@ -22,6 +24,34 @@ function openFile(path, on) {
   g.active = k; g.used = Date.now();
   setShared(GROUPS, groups); setShared(ACTIVE, gid);
   if (fresh) run("pane.split", { direction: "right", mod: "ide-editor", props: { group: gid, seed: { tabs: [{ path, on: on ?? null }], active: k } } });
+}
+
+// Download: copy a file (on another machine: through `hc exec --on <machine> cat`, byte for
+// byte) into a folder here, never over an existing file: "name (1).ext" instead. It lands as
+// .part first, so a failed copy leaves nothing half-written. Prints where it landed.
+const DOWNLOAD = `d=$3; mkdir -p "$d" || exit 1
+n=\${2##*/}; s=\${n%.*}; e=\${n#"$s"}; [ -z "$s" ] && { s=$n; e=; }
+out=$d/$n; i=1
+while [ -e "$out" ] || [ -e "$out.part" ]; do out="$d/$s ($i)$e"; i=$((i+1)); done
+if [ -n "$1" ]; then hc=$(command -v hc || echo "$HOME/.local/bin/hc"); "$hc" exec --on "$1" --timeout 600 cat -- "$2" > "$out.part"
+else cat -- "$2" > "$out.part"; fi || { rm -f "$out.part"; exit 1; }
+mv "$out.part" "$out" && printf %s "$out"`;
+const tilde = p => p.startsWith(home() + "/") ? "~" + p.slice(home().length) : p;
+
+async function download(path, on, dir) {
+  const name = path.split(/[\\/]/).pop();
+  const fail = body => notify({ title: `Couldn't download ${name}`, body, level: "error" });
+  if (window()?.platform === "windows") return fail("Downloading needs sh, which Windows doesn't have");
+  try {
+    const r = await exec("sh", ["-c", DOWNLOAD, "download", on ?? "", path, dir ?? `${home()}/Downloads`], { timeout: 600000 });
+    if (r.code !== 0) return fail(r.stderr.trim() || `exit ${r.code}`);
+    notify({ title: `Downloaded ${name}`, body: tilde(r.stdout), level: "success", timeout: 4000 });
+  } catch (e) { fail(String(e?.message ?? e)); }
+}
+
+// ide-editor's tabs open the same popup with the same call.
+function openFileMenu(path, on) {
+  openOverlay({ mod: "ide-files", kind: "popup", width: 230, height: 108, props: { fileMenu: { path, on: on ?? null } } });
 }
 
 // A mod pane (an editor) has no folder: show the tab's last focused terminal's instead.
@@ -59,6 +89,7 @@ async function directory(path, on) {
 
 export default class Files extends View {
   init(_props, cx) {
+    if (props()?.fileMenu) return;
     this.saved = new Map();
     this.entries = new Map(); this.folders = new Set(); this.pending = new Set(); this.marks = {};
     this.refresh(cx);
@@ -173,6 +204,7 @@ export default class Files extends View {
       const path = prefix ? `${prefix}/${entry.name}` : entry.name, open = this.folders.has(path), mark = this.marks[`${this.root}/${path}`];
       out.push(h_flex().id(`file-${path}`).h(28).flex_none().pl(8 + depth * 18).pr(8).gap(7).items_center().rounded(7).cursor_pointer().hover(s => s.bg(t.hover))
         .on_click((_e, cx) => entry.dir ? this.toggle(path, cx) : openFile(`${this.root}/${path}`, this.on))
+        .when(!entry.dir, el => el.on_mouse_down("right", () => openFileMenu(`${this.root}/${path}`, this.on)))
         .child(entry.dir ? svg(`mods/ide-files/chevron-${open ? "down" : "right"}.svg`).size(12).flex_none().text_color(t.dim) : div().w(12).flex_none())
         .child(svg(`mods/ide-files/${entry.dir ? "folder" : "file"}.svg`).size(14).flex_none().text_color(t.muted))
         .child(div().flex_1().min_w(0).truncate().child(entry.name))
@@ -182,7 +214,24 @@ export default class Files extends View {
     return out;
   }
 
+  fileMenu(t) {
+    const { path, on } = props().fileMenu, name = path.split(/[\\/]/).pop();
+    const item = (id, icon, label, act) => h_flex().id(id).h(31).px(8).gap(9).rounded(7).items_center().cursor_pointer()
+      .text_color(t.foreground).hover(el => el.bg(t.hover))
+      .on_click(() => { closeOverlay(props().overlay); act(); })
+      .child(svg(`mods/ide-files/${icon}.svg`).size(14).flex_none().text_color(t.muted))
+      .child(div().flex_1().child(label));
+    return v_flex().w_full().p(5).bg(t.popover).text_size(12.8)
+      .child(div().px(8).pt(4).pb(6).text_size(11).text_color(t.dim).truncate().child(on ? `${name} · ${on}` : name))
+      .child(item("file-download", "download", "Download", () => download(path, on)))
+      .child(item("file-download-to", "folder-down", "Download to…", async () => {
+        const dir = await pickFolder({ prompt: "Download here" });
+        if (dir) download(path, on, dir);
+      }));
+  }
+
   render(cx) {
+    if (props()?.fileMenu) return this.fileMenu(theme());
     if (key() !== this.context?.key) this.refresh(cx);
     const t = theme();
     return v_flex().id("files").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
