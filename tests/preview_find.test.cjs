@@ -51,3 +51,24 @@ test('the gap between split blocks matches the unsplit view', () => {
   assert.ok(near(blockGap('Para', '---'), 14 * 1.6));
   assert.ok(near(blockGap('Title\n=====', 'Para'), 14 * 1.8 * 0.35)); // setext h1
 });
+
+test('a fence ends only at a real closer: same mark, at least as long, nothing after', () => {
+  const page = '```\n```not-a-closer\n\n**still literal**\n````\n\nafter';
+  assert.deepEqual([...blocks(page)].map(b => b.md.trim().split('\n').at(-1)), ['````', 'after']);
+  assert.equal(shown(page).text.includes('**still literal**'), true); // kept as code
+});
+
+test('autolinks keep their address; HTML tags go', () => {
+  const page = 'See <https://example.com>, <a@b.co> and <b>bold</b>.';
+  assert.equal(shown(page).text, 'See https://example.com, a@b.co and bold.');
+  assert.equal(hits(page, 'example.com').length, 1);
+});
+
+test('reference links show their text; definitions show nothing', () => {
+  const page = 'Read [the guide][g] today, [g] and [G][].\n\n[g]: https://example.com/hidden "Title"\n\n[not a ref] stays.';
+  assert.equal(hits(page, 'hidden').length, 0);
+  assert.equal(hits(page, 'guide today').length, 1);
+  const [[a, b]] = hits(page, 'the guide');
+  assert.equal(page.slice(a, b), 'the guide');
+  assert.match(shown(page).text, /\[not a ref\] stays\./);
+});

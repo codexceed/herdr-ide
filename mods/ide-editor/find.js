@@ -4,6 +4,17 @@
 // - hits(md, query): every match in the text a block shows, as [start, end) offsets into its
 //   Markdown source, the coordinates TextView.highlight_range takes.
 
+// CommonMark fences: up to 3 spaces in; a ``` opener's info has no backtick; the closer is the
+// same mark, at least as long, with nothing after it.
+const opens = line => {
+  const f = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+  return f && !(f[1][0] === "`" && f[2].includes("`")) ? f[1] : null;
+};
+const closes = (line, fence) => {
+  const f = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
+  return Boolean(f && f[1][0] === fence[0] && f[1].length >= fence.length);
+};
+
 // Cuts at blank lines that start a new top-level block. Never inside a fence or an HTML
 // comment / <pre> / <script> / <style> block, before an indented line (a list item's
 // continuation, indented code), or between items of one list. A page with reference links
@@ -16,7 +27,7 @@ export function blocks(md) {
   for (const line of lines) {
     const here = pos;
     pos += line.length + 1;
-    if (fence) { if (line.trim().startsWith(fence)) fence = null; blank = false; continue; }
+    if (fence) { if (closes(line, fence)) fence = null; blank = false; continue; }
     if (raw) { if (raw.test(line)) raw = null; blank = false; continue; }
     if (!line.trim()) { blank = true; continue; }
     if (blank && here > start && !/^\s/.test(line) && !(item(line) && item(first ?? ""))) {
@@ -25,8 +36,8 @@ export function blocks(md) {
     }
     blank = false;
     first ??= line;
-    const f = line.match(/^ {0,3}(`{3,}|~{3,})/);
-    if (f) { fence = f[1]; continue; }
+    const f = opens(line);
+    if (f) { fence = f; continue; }
     if (/^ {0,3}<!--/.test(line) && !/-->/.test(line)) raw = /-->/;
     else {
       const tag = line.match(/^ {0,3}<(pre|script|style|textarea)\b/i);
@@ -37,11 +48,16 @@ export function blocks(md) {
   return out.filter(b => b.md.trim());
 }
 
+const DEFINITION = /^ {0,3}\[([^\]^][^\]]*)\]:\s*\S+(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*$/;
+const label = text => text.trim().replace(/\s+/g, " ").toLowerCase();
+const AUTOLINK = "(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\\s]*|[^<>\\s@]+@[^<>\\s]+)";
+
 // The text a block shows, with each character's source offset: { text, at }. Close enough to
 // search: emphasis marks, link targets, images, tags, escapes, heading / quote / list marks
 // and table pipes are left out; code (spans and fences) is kept as written; a line break is a
 // space, and a table cell break a "\n" that no query (trimmed) can match across.
 export function shown(md) {
+  const refs = new Set([...md.matchAll(new RegExp(DEFINITION.source, "gm"))].map(m => label(m[1])));
   const n = md.length, drop = new Uint8Array(n), keep = new Uint8Array(n), swap = new Map();
   const mark = (arr, a, b) => { for (let i = a; i < b; i++) arr[i] = 1; };
   let pos = 0, fence = null;
@@ -49,13 +65,14 @@ export function shown(md) {
     const s = pos, e = s + line.length;
     pos = e + 1;
     if (e < n) swap.set(e, " ");
-    const f = line.match(/^\s*(`{3,}|~{3,})/);
     if (fence) {
-      if (f && f[1][0] === fence[0] && f[1].length >= fence.length && !line.trim().slice(f[1].length).trim()) { fence = null; mark(drop, s, e); }
+      if (closes(line, fence)) { fence = null; mark(drop, s, e); }
       else mark(keep, s, e);
       continue;
     }
-    if (f) { fence = f[1]; mark(drop, s, e); continue; }
+    const f = opens(line);
+    if (f) { fence = f; mark(drop, s, e); continue; }
+    if (DEFINITION.test(line)) { mark(drop, s, e); continue; } // a reference definition shows nothing
     if (/^\s*\|?(\s*:?-{3,}:?\s*\|)+\s*:?-*:?\s*$|^\s*:?-{3,}:?\s*\|/.test(line) || /^ {0,3}([-*_])(\s*\1){2,}\s*$/.test(line)) { mark(drop, s, e); continue; }
     const lead = line.match(/^\s*(?:(?:>\s?)|(?:#{1,6}\s+)|(?:[-*+]\s+(?:\[[ xX]\]\s+)?)|(?:\d+[.)]\s+))*/)[0].length;
     mark(drop, s, s + lead);
@@ -65,12 +82,22 @@ export function shown(md) {
       mark(drop, at + m[0].length - m[1].length, at + m[0].length);
     });
     const free = (a, b) => { for (let i = a; i < b; i++) if (keep[i]) return false; return true; };
-    each(/!\[[^\]]*\]\([^)]*\)/g, (m, at) => { if (free(at, at + m[0].length)) mark(drop, at, at + m[0].length); });
+    each(/!\[[^\]]*\](?:\([^)]*\)|\[[^\]]*\])/g, (m, at) => { if (free(at, at + m[0].length)) mark(drop, at, at + m[0].length); });
     each(/\[([^\]]*)\]\(([^)]*)\)/g, (m, at) => {
       if (!free(at, at + 1)) return;
       drop[at] = 1; mark(drop, at + 1 + m[1].length, at + m[0].length);
     });
-    each(/<\/?[A-Za-z][^>]*>|<(?=https?:)|(?<=<https?:[^>\s]*)>/g, (m, at) => { if (free(at, at + m[0].length)) mark(drop, at, at + m[0].length); });
+    // A reference link shows its text: [text][label], [text][] and [label] (when defined).
+    each(/\[([^\]]*)\]\[([^\]]*)\]/g, (m, at) => {
+      if (!free(at, at + 1) || drop[at] || !refs.has(label(m[2] || m[1]))) return;
+      drop[at] = 1; mark(drop, at + 1 + m[1].length, at + m[0].length);
+    });
+    each(/(?<![\]!])\[([^\]]+)\](?![(\[:])/g, (m, at) => {
+      if (!free(at, at + 1) || drop[at] || !refs.has(label(m[1]))) return;
+      drop[at] = 1; drop[at + m[0].length - 1] = 1;
+    });
+    // An autolink shows its address, so only its brackets go; an HTML tag goes whole.
+    each(new RegExp(`<(?=${AUTOLINK}>)|(?<=<${AUTOLINK})>|<\\/?[A-Za-z][A-Za-z0-9-]*(?=[\\s/>])[^>]*>`, "g"), (m, at) => { if (free(at, at + m[0].length)) mark(drop, at, at + m[0].length); });
     each(/\\(?=[!-/:-@[-`{-~])/g, (_m, at) => { if (free(at, at + 1)) drop[at] = 1; });
     each(/\*+|~~/g, (m, at) => { if (free(at, at + m[0].length)) mark(drop, at, at + m[0].length); });
     each(/_+/g, (m, at) => {
