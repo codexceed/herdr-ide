@@ -28,7 +28,6 @@ const body = text => text.replace(/^(---|\+\+\+)\r?\n[\s\S]*?\r?\n\1[ \t]*(\r?\n
 
 // Mermaid: each ```mermaid block is rendered once by mermaid-cli (mmdc) to a PNG, cached by content + theme.
 const MERMAID_DIR = "data/ide-mermaid", MERMAID_SCALE = 2;
-const FENCE = /^```mermaid[^\n]*\n([\s\S]*?)^```[ \t]*$/gm;
 const hash = text => { let h = 0x811c9dc5; for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193); return (h >>> 0).toString(16) + text.length.toString(16); };
 const MMDC = `set -e; mkdir -p "$(dirname "$2")"
 if [ ! -s "$2" ]; then tmp="$2.$$.mmd"; printf '%s' "$1" > "$tmp"
@@ -36,16 +35,48 @@ if [ ! -s "$2" ]; then tmp="$2.$$.mmd"; printf '%s' "$1" > "$tmp"
   rm -f "$tmp"; mv "$2.$$.png" "$2"; fi
 sips -g pixelWidth -g pixelHeight "$2" | awk '/pixel/ {print $2}'`;
 // Splits the page into Markdown, ```mermaid blocks and image blocks (a line holding only
-// ![alt](src), <img> or <picture>), which TextView doesn't draw. Other fences stay Markdown.
-const BLOCKS = /^(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)^\1[ \t]*$|^[ \t]*(!\[[^\]\n]*\]\([^)\n]*\)|<picture\b[\s\S]*?<\/picture>|<img\b[^>]*>)[ \t]*$/gim;
+// ![alt](src), <img> or <picture>), which TextView doesn't draw. Fences follow CommonMark (up to
+// 3 spaces in, closed by at least as many of the same mark); an image indented 4+ spaces is an
+// indented code example, so other fences and code stay Markdown, images and all.
+const IMAGE_LINE = /^ {0,3}(!\[[^\]\n]*\]\([^)\n]*\)|<img\b[^>]*>)[ \t]*$/i;
 const parts = (text, dark = true) => {
-  const out = []; let last = 0;
-  for (const m of text.matchAll(BLOCKS)) {
-    let part;
-    if (m[1] !== undefined) { if (!/^mermaid\b/i.test(m[2].trim())) continue; part = { mermaid: m[3] }; }
-    else if (!(part = imageOf(m[4], dark))) continue;
-    if (m.index > last) out.push({ md: text.slice(last, m.index) });
-    out.push(part); last = m.index + m[0].length;
+  const out = [], lines = text.split("\n");
+  let last = 0, pos = 0, fence = null;
+  const cut = (start, end, part) => {
+    if (start > last) out.push({ md: text.slice(last, start) });
+    out.push(part); last = end;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i], start = pos;
+    pos += line.length + 1;
+    if (fence) {
+      const close = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
+      if (close && close[1][0] === fence.mark[0] && close[1].length >= fence.mark.length) {
+        if (fence.mermaid) cut(fence.start, start + line.length, { mermaid: text.slice(fence.body, start) });
+        fence = null;
+      }
+      continue;
+    }
+    const open = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (open && !(open[1][0] === "`" && open[2].includes("`"))) {
+      fence = { mark: open[1], start, body: pos, mermaid: /^mermaid\b/i.test(open[2].trim()) };
+      continue;
+    }
+    const img = line.match(IMAGE_LINE), pic = !img && line.match(/^ {0,3}<picture\b/i);
+    if (img) {
+      const part = imageOf(img[1], dark);
+      if (part) cut(start, start + line.length, part);
+    } else if (pic) {
+      const close = text.toLowerCase().indexOf("</picture>", start);
+      if (close < 0) continue;
+      const tagEnd = close + "</picture>".length, nl = text.indexOf("\n", tagEnd), end = nl < 0 ? text.length : nl;
+      if (text.slice(tagEnd, end).trim()) continue;
+      const part = imageOf(text.slice(start + pic[0].length - "<picture".length, tagEnd), dark);
+      if (!part) continue;
+      cut(start, end, part);
+      i += text.slice(start, end).split("\n").length - 1;
+      pos = end + 1;
+    }
   }
   if (last < text.length) out.push({ md: text.slice(last) });
   return out;

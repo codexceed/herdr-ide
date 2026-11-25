@@ -301,6 +301,19 @@ test('image blocks split out of the Markdown, and <picture> follows the theme', 
   assert.equal(parts(PAGE, true).map(p => p.md ?? '').join('').includes('<picture>'), false);
 });
 
+test('images in code stay code: indented code, indented fences, longer closers, ~~~ in ```', () => {
+  const { parts } = harness();
+  const page = [
+    'Example:', '', '    ![example](example.png)', '',
+    '  ```md', '![in an indented fence](a.png)', '  ```', '',
+    '```', '![closed by a longer fence](b.png)', '~~~', '![still in it](c.png)', '`````', '',
+    '![real](d.png)',
+  ].join('\n');
+  const ps = [...parts(page, true)];
+  assert.deepEqual(ps.map(p => p.image ?? 'md'), ['md', 'd.png']);
+  for (const f of ['example.png', 'a.png', 'b.png', 'c.png']) assert.match(ps[0].md, new RegExp(f.replace('.', '\\.')));
+});
+
 test('image paths resolve against the page folder', () => {
   const { imagePath } = harness();
   assert.equal(imagePath('/r/skill/SKILL.md', 'references/x.svg'), '/r/skill/references/x.svg');
