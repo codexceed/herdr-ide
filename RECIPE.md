@@ -115,7 +115,11 @@ Left to right, the same frame as Herdr's `main` layout:
   Shift-Enter or its arrows step. In an editor pane ⌘F (`layout:herdr-ide`) turns the
   pane's header into a find bar over the open file: query, `3 of 12`, ↑↓ (or the
   chevrons) to step, Enter copies the line, Esc or × closes, and every match is listed
-  under the breadcrumb. Matches are lines, newest first, any case.
+  under the breadcrumb. Matches are lines, newest first, any case. Over a rendered
+  Markdown page the bar searches the text as shown (`are fixed` matches `are **fixed`;
+  link targets, tags and table pipes are skipped): every hit is highlighted, the current
+  one stronger and scrolled into view, Enter / Shift-Enter step, and Esc closes the bar
+  even after a click into the page.
 - **Go to file:** ⌘P (`layout:herdr-ide`; Herdr's own ⌘P tab picker moves to ⌥⌘P) searches
   the git repo holding the focused terminal's folder (tracked and untracked files, not
   ignored ones), else that folder (`rg --files` or `find`, at most 50,000 files), else the
@@ -205,7 +209,16 @@ Left to right, the same frame as Herdr's `main` layout:
   matches}}`, one entry per open bar; `matches` carries each line cut around the hit,
   which `ide-editor` draws as its list. Each load or close bumps a
   generation, so a read that finishes late is dropped; an editor bar reloads when the
-  editor's active file changes.
+  editor's active file changes. Over a Markdown preview, `ide-editor` counts the hits and
+  writes `shared("ide-find.preview")` = `{[pane]: {file, query, count}}`, which the bar
+  shows and steps through; Esc on the page removes the pane's `ide-find` entry, and the
+  bar closes once it sees it gone.
+- `ide-editor/find.js`: the preview's find. `blocks` cuts the page into top-level blocks
+  (never inside a fence, an HTML block or a list; a page with reference links or footnotes
+  stays whole), each its own `TextView`, so a `ScrollHandle` can reveal the block holding
+  the current hit. `blockGap` puts back the space `TextView` leaves between blocks (taken
+  from gpui-component's `text/node.rs`). `shown` maps the rendered text to source
+  offsets, and `hits` returns them for `highlight_range`.
 - `ide-open` (`place: none`; `mod.json` overlay = popup at the top, 640×470): opened by
   `mod.open:ide-open`, so it reads where ⌘P was pressed from `focused()` / `panes()` when
   it opens. Ranking is an fzf-style alignment per path (16 per letter, +10 after `/`, +8

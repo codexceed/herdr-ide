@@ -4,14 +4,17 @@
 //   path covers the palette and anyone who kept cmd-f on ide-pane.find.
 // - editor pane (mods/ide-editor): the header turns into a find bar over the open file and
 //   steps through matching lines; Enter copies one; the editor lists every match below.
+//   Over a rendered Markdown preview it steps through every hit in the page instead (Enter /
+//   Shift-Enter): the editor highlights them, scrolls to the current one and reports the count.
 // State: shared("ide-find") = { [pane]: { query, at, matches } } for each open editor bar;
 // matches are [{ n, parts: [before, hit, after] }], drawn by the editor.
+// shared("ide-find.preview") = { [pane]: { file, query, count } }, written by the editor.
 // Props from the app: { pane, terminal }.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, InputState, Input } from "gpui-base";
 import { panes, terminals, props, run, theme, home, readTextFile, shared, setShared, nextCommand, notify } from "herdr";
 
-const FIND = "ide-find", SHOWN = 300, BEFORE = 40;
+const FIND = "ide-find", HITS = "ide-find.preview", SHOWN = 300, BEFORE = 40;
 const keyOf = t => `${t.on ?? ""}:${t.path}`;
 
 function icon(p, size, color) {
@@ -74,7 +77,7 @@ export default class Pane extends View {
     this.gen = 0; // bumped by every load and close; a read that finishes later is dropped
     this.input = InputState.new({ placeholder: "Find" });
     this.input.on("change", (_e, cx) => { this.update({ query: this.input.value(), at: 0 }); cx.notify(); });
-    this.input.on("submit", (_e, cx) => this.copy(cx));
+    this.input.on("submit", (_e, cx) => { if (this.previewing()) this.step(this.back ? -1 : 1); else this.copy(cx); this.back = false; cx.notify(); });
     cx.spawn(async cx => {
       for (;;) {
         const c = await nextCommand();
@@ -93,6 +96,18 @@ export default class Pane extends View {
   file() {
     const g = Object.values(shared("ide-editor.groups") ?? {}).find(x => x.open && x.pane === props()?.pane);
     return g?.tabs?.find(t => keyOf(t) === g.active) ?? null;
+  }
+
+  // True when the editor shows this file as a rendered Markdown page.
+  previewing() {
+    const g = Object.values(shared("ide-editor.groups") ?? {}).find(x => x.open && x.pane === props()?.pane);
+    return Boolean(g?.active && g.preview?.includes(g.active) && /\.(md|markdown|mdx)$/i.test(this.file()?.path ?? ""));
+  }
+
+  // The preview's hit count for the current query, or null until the editor has counted.
+  previewCount() {
+    const h = shared(HITS)?.[props()?.pane], tab = this.file();
+    return h && tab && h.file === keyOf(tab) && h.query === this.state().query.trim() ? h.count : null;
   }
 
   state() {
@@ -152,7 +167,7 @@ export default class Pane extends View {
   }
 
   step(by) {
-    const n = this.found().length;
+    const n = this.previewing() ? this.previewCount() ?? 0 : this.found().length;
     if (n) this.update({ at: (this.state().at + by + n) % n });
   }
 
@@ -192,7 +207,10 @@ export default class Pane extends View {
 
   findBar(t, p) {
     const found = this.found(), at = this.state().at, q = this.state().query.trim();
-    const count = this.error ?? (this.lines === null ? "Reading…" : !q ? `${this.lines.length.toLocaleString()} lines`
+    const hits = this.previewing() ? this.previewCount() : undefined;
+    const count = hits !== undefined
+      ? (!q ? "Find in page" : hits === null ? "Searching…" : hits ? `${at % hits + 1} of ${hits}` : "No matches")
+      : this.error ?? (this.lines === null ? "Reading…" : !q ? `${this.lines.length.toLocaleString()} lines`
       : found.length ? `${at + 1} of ${found.length === SHOWN ? `${SHOWN}+` : found.length}` : "No matches");
     return h_flex()
       .id(`pane-find-${p.pane}`)
@@ -205,6 +223,8 @@ export default class Pane extends View {
       .border_color(t.accent)
       .text_size(12)
       .on_key_down((e, cx) => {
+        // Shift-Enter steps back over a preview; the input's submit does the stepping.
+        if (e.key === "enter") { this.back = Boolean(e.modifiers?.shift); return; }
         if (e.key === "escape") this.close();
         else if (e.key === "down") this.step(1);
         else if (e.key === "up") this.step(-1);
@@ -226,6 +246,11 @@ export default class Pane extends View {
     const t = theme();
     const p = this.me();
     if (!p) return div();
+    // The editor dropped our search (Esc pressed on the page itself): close the bar.
+    // (Only once the entry was seen, in case a fresh write isn't visible yet.)
+    const mine = Boolean(shared(FIND)?.[p.pane]);
+    if (this.finding && this.seen && !mine) this.close();
+    this.seen = this.finding && mine;
     if (this.finding) {
       // The editor switched files under an open bar: search the file it shows now.
       const tab = this.file();

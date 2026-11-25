@@ -8,11 +8,14 @@
 // Commands (keys.json): ide-editor.markdown (cmd-shift-v: markdown or HTML preview), .split (cmd-\), .close (cmd-w).
 // Find (cmd-f) lives in the pane header (mods/ide-pane); this pane lists its matches.
 import { View, div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, Editor, EditorState, TextView } from "gpui-base";
+import { v_flex, h_flex, Editor, EditorState, TextView, ScrollHandle } from "gpui-base";
 import { props, shared, setShared, focused, panes, run, exec, readTextFile, writeTextFile, notify, theme, settings, appHome, home, nextCommand, openOverlay } from "herdr";
 import { isSheet, sheetView, initialView, scrollBy, moveSel, cellContent } from "./sheet.js";
+import { blocks, blockGap, shown, hits } from "./find.js";
 
 const KEY = "ide-editor.groups", ACTIVE = "ide-editor.active", MOD = "ide-editor", FIND = "ide-find";
+// The preview's find count for the header's bar: { [pane]: { file, query, count } }.
+const HITS = "ide-find.preview";
 const LANG = { ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js", toml: "yaml", jsonc: "json", svelte: "html", vue: "html" };
 const keyOf = t => `${t.on ?? ""}:${t.path}`;
 const nameOf = path => path.split(/[\\/]/).pop();
@@ -161,6 +164,7 @@ export default class EditorGroup extends View {
     this.gid = props()?.group ?? newId();
     this.docs = new Map(); // tab key -> { text, code, error, loading }
     this.handle = cx.focus_handle();
+    this.mdScroll = ScrollHandle.new(); // the Markdown preview, scrolled to the current find hit
     this.pane = this.group().pane;
     this.claimPane = false; // restored background groups must not claim global focus
     this.gen = 0; // bumped when this pane loses focus, to remount the preview's text
@@ -374,13 +378,54 @@ export default class EditorGroup extends View {
     return p;
   }
 
+  // The preview's parts, Markdown cut into blocks; kept until the text or theme changes.
+  mdParts(text, dark) {
+    if (this.mdCache?.text !== text || this.mdCache.dark !== dark)
+      this.mdCache = { text, dark, items: parts(body(text), dark).flatMap(p => p.md === undefined ? [p]
+        : blocks(p.md).map((b, i, all) => ({ md: b.md, gap: i ? blockGap(all[i - 1].md, b.md) : 0 }))) };
+    return this.mdCache.items;
+  }
+
+  // The header's find over the preview: every hit highlighted, the current one stronger and
+  // scrolled into view; the count goes back to the bar through shared(HITS).
+  previewFind(k, items) {
+    const f = this.pane ? shared(FIND)?.[this.pane] : null, query = f?.query?.trim() ?? "";
+    const found = []; // [item index, start, end]
+    if (query) items.forEach((it, i) => {
+      if (it.md === undefined) return;
+      it.view ??= shown(it.md);
+      for (const [a, b] of hits(it.md, query, it.view)) found.push([i, a, b]);
+    });
+    const at = found.length ? ((f?.at ?? 0) % found.length + found.length) % found.length : -1;
+    if (this.pane) {
+      const all = shared(HITS) ?? {}, mine = all[this.pane];
+      const next = f ? { file: k, query, count: found.length } : null;
+      if (JSON.stringify(mine ?? null) !== JSON.stringify(next)) {
+        const copy = { ...all };
+        if (next) copy[this.pane] = next; else delete copy[this.pane];
+        setShared(HITS, Object.keys(copy).length ? copy : null);
+      }
+    }
+    const spot = at >= 0 ? `${k}\n${query}\n${at}` : null;
+    if (spot && spot !== this.findSpot) this.mdScroll.scroll_to_item(found[at][0]);
+    this.findSpot = spot;
+    return { found, at };
+  }
+
   markdownView(k, tab, text, t, cx) {
     const room = Math.max(120, (this.width ?? 600) - 48);
     // Only the focused pane's preview takes the mouse: a drag that ends over another pane never
     // sees its mouse-up, and an unfocused preview would keep selecting on hover.
-    const id = `md-${k}-${this.gen}`;
-    return parts(body(text), settings().dark !== false).map((part, i) => {
-      if (part.md !== undefined) return TextView.markdown(`${id}-${i}`, part.md).selectable(this.here);
+    const id = `md-${k}-${this.gen}`, items = this.mdParts(text, settings().dark !== false);
+    const { found, at } = this.previewFind(k, items);
+    const mark = (t.ansi3 ?? "#e5c07b").slice(0, 7);
+    return items.map((part, i) => {
+      if (part.md !== undefined) {
+        let view = TextView.markdown(`${id}-${i}`, part.md).selectable(this.here);
+        found.forEach(([j, a, b], n) => { if (j === i && n !== at) view = view.highlight_range(a, b, mark + "55"); });
+        if (at >= 0 && found[at][0] === i) view = view.highlight_range(found[at][1], found[at][2], mark + "c0");
+        return part.gap ? div().pt(part.gap).child(view) : view;
+      }
       if (part.image !== undefined) {
         const p = this.picture(tab, part.image, cx);
         if (p.state === "ready") {
@@ -549,6 +594,14 @@ export default class EditorGroup extends View {
       .track_focus(this.handle)
       .on_mouse_down("left", () => this.activate())
       .on_key_down((e, cx) => {
+        // Esc with the page (not the find field) focused still closes this pane's find bar:
+        // dropping its shared entry tells ide-pane to close.
+        if (e.key === "escape" && this.pane && shared(FIND)?.[this.pane]) {
+          const { [this.pane]: _gone, ...rest } = shared(FIND);
+          setShared(FIND, Object.keys(rest).length ? rest : null);
+          cx.stop_propagation(); cx.notify();
+          return;
+        }
         if (!d?.book || !d.view) return;
         const took = this.sheetKey(e, d);
         if (took === "copy") { cx.write_to_clipboard(cellContent(d.book, d.view)); notify({ title: "Copied cell", level: "success", timeout: 1500 }); }
@@ -557,7 +610,7 @@ export default class EditorGroup extends View {
       .child(this.tabStrip(g, t))
       .when(Boolean(tab), el => el.child(h_flex().h(24).flex_none().px(12).items_center().text_size(11).text_color(t.dim)
         .child(div().flex_1().min_w(0).truncate().child(rel))))
-      .when(Boolean(this.findList(t)), el => el.child(this.findList(t)))
+      .when(!(preview && isMarkdown(tab.path)) && Boolean(this.findList(t)), el => el.child(this.findList(t)))
       .child(!tab
         ? v_flex().flex_1().items_center().justify_center().text_color(t.dim).child("No open files · pick one in Files")
         : d?.book ? this.sheet(d, t, cx)
@@ -571,7 +624,7 @@ export default class EditorGroup extends View {
               .on_size_change((size, cx) => { if (size.width !== this.width) { this.width = size.width; cx.notify(); } })
               .child(this.htmlView(tab, d.text, t, cx))
         : preview
-          ? v_flex().id(`eg-md-${k}`).flex_1().min_h(0).overflow_y_scrollbar().px(24).py(16).text_size(14).font_family(PREVIEW_FONT)
+          ? v_flex().id(`eg-md-${k}`).flex_1().min_h(0).overflow_y_scrollbar().track_scroll(this.mdScroll).px(24).py(16).text_size(14).font_family(PREVIEW_FONT)
               .on_size_change((size, cx) => { if (size.width !== this.width) { this.width = size.width; cx.notify(); } })
               .children(this.markdownView(k, tab, d.text, t, cx))
           : d?.code ? Editor.new(d.code).flex_1().min_h(0)

@@ -3,9 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
-// main.js imports sheet.js; the harness strips imports, so sheet.js is inlined ahead of it.
-const SHEET = fs.readFileSync(path.join(__dirname, '../mods/ide-editor/sheet.js'), 'utf8')
+// main.js imports sheet.js and find.js; the harness strips imports, so both are inlined ahead of it.
+const inline = f => fs.readFileSync(path.join(__dirname, '../mods/ide-editor', f), 'utf8')
   .replace(/^import .*;\n/gm, '').replace(/^export (const|function) /gm, '$1 ');
+const SHEET = inline('sheet.js') + inline('find.js');
 
 function harness() {
   const state = { groups: {}, active: null, group: 'a', focus: 'pane-a', read: 'original', calls: [], panes: ['pane-a', 'pane-b'] };
@@ -13,7 +14,7 @@ function harness() {
   const sandbox = {
     View: class {}, div: () => element, svg: () => element, image: () => element,
     v_flex: () => element, h_flex: () => element,
-    Editor: { new: () => element }, TextView: {},
+    Editor: { new: () => element }, TextView: {}, ScrollHandle: { new: () => ({ scroll_to_item() {} }) },
     EditorState: { new: () => ({ released: false, release() { this.released = true; } }) },
     props: () => ({ group: state.group }),
     shared: key => key.endsWith('groups') ? state.groups : state.active,
@@ -51,7 +52,7 @@ test('restored background groups keep their own pane and split there after Files
 test('a copy opened without a group (herdr-app check) saves nothing', () => {
   const { context } = harness();
   const sandbox = { View: class {}, div: () => null, svg: () => null, image: () => null, v_flex: () => null, h_flex: () => null,
-    Editor: {}, TextView: {}, EditorState: {}, props: () => ({}), shared: () => undefined,
+    Editor: {}, TextView: {}, ScrollHandle: { new: () => ({}) }, EditorState: {}, props: () => ({}), shared: () => undefined,
     setShared: () => { throw new Error('saved'); }, focused: () => null, panes: () => [], run() {}, theme: () => ({}), settings: () => ({}), home: () => '/' };
   const source = SHEET + fs.readFileSync(path.join(__dirname, '../mods/ide-editor/main.js'), 'utf8')
     .replace(/^import .*;\n/gm, '').replace('export default class EditorGroup', 'class EditorGroup');
@@ -144,7 +145,7 @@ function htmlGroup() {
   const element = new Proxy({}, { get: () => () => element });
   const sandbox = {
     View: class {}, div: () => element, svg: () => element, image: () => element, v_flex: () => element, h_flex: () => element,
-    Editor: { new: () => element }, TextView: {}, EditorState: { new: () => ({ release() {} }) },
+    Editor: { new: () => element }, TextView: {}, ScrollHandle: { new: () => ({ scroll_to_item() {} }) }, EditorState: { new: () => ({ release() {} }) },
     props: () => ({ group: 'a' }), shared: key => key.endsWith('groups') ? state.groups : state.active,
     setShared: (key, value) => { if (key.endsWith('groups')) state.groups = value; else state.active = value; },
     focused: () => ({ pane: 'pane-a', tab: 'tab' }), panes: () => [{ pane: 'pane-a', mod: 'ide-editor', tab: 'tab' }],

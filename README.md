@@ -80,7 +80,7 @@ The mods run local programs and read outside their folder:
 | Markdown or HTML preview ⇄ source | ⌘⇧V or the `</>` button |
 | Use an HTML page interactively | The ↗ button (HTML files): opens it in your default browser |
 | Find in a terminal | ⌘F: Herdr's find bar searches the screen and history, highlights each hit and scrolls to it; Enter / Shift-Enter or its arrows step |
-| Find in a file | ⌘F in an editor pane: the header turns into a find bar listing every match; ↑↓ steps, Enter copies the line, Esc closes |
+| Find in a file | ⌘F in an editor pane: the header turns into a find bar listing every match; ↑↓ steps, Enter copies the line, Esc closes. Over a rendered Markdown page it highlights each hit in the page and Enter / Shift-Enter step to it |
 | Split terminals / agents | ⌘D (right), ⌘⇧D (down) |
 | Watch a swarm | Subagents appear under their agent while they run |
 | See which agent needs you | A pane's header lights up blue when its agent finishes and red when it asks you something |

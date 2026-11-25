@@ -55,7 +55,7 @@ function headers() {
   const sandbox = {
     View: class {}, div: () => element, svg: () => element, image: () => element, h_flex: () => element, Input: { new: () => element },
     InputState: { new: () => { const on = {}; return { on: (e, fn) => { on[e] = fn; }, fire: (e, cx) => on[e](null, cx), focus() {}, v: '', set_value(v) { this.v = v; }, value() { return this.v; } }; } },
-    panes: () => state.panes, props: () => ({ pane: state.pane }), run: (command, args) => state.calls.push({ command, args }),
+    panes: () => state.panes, terminals: () => [], focused: () => null, props: () => ({ pane: state.pane }), run: (command, args) => state.calls.push({ command, args }),
     theme: () => ({}), home: () => '/home/test', notify() {}, nextCommand: () => new Promise(() => {}),
     shared: key => state.shared[key], setShared: (key, value) => { state.shared[key] = value; },
     readTextFile: p => read(p),
@@ -131,4 +131,58 @@ test('a closed bar\'s read does not bring its search back', async () => {
   pending.resolve('late'); await settle();
   assert.equal(state.shared['ide-find']?.ed, undefined);
   assert.equal(a.lines, null);
+});
+
+// Over a rendered Markdown page the bar steps through the editor's hits (its count arrives in
+// shared("ide-find.preview")); Enter steps instead of copying, Shift-Enter steps back.
+test('over a Markdown preview, Enter and Shift-Enter step through the page\'s hits', async () => {
+  const { state, cx, header, as, settle, type, editor } = headers();
+  editor('/a.md');
+  state.shared['ide-editor.groups'].g.preview = [':/a.md'];
+  const h = header('ed');
+  as('ed', () => h.open(cx)); state.reads.shift().resolve('**herdr** and herdr'); await settle();
+  type(h, 'ed', 'herdr');
+  assert.equal(as('ed', () => h.previewCount()), null); // the editor hasn't counted yet
+  state.shared['ide-find.preview'] = { ed: { file: ':/a.md', query: 'herdr', count: 3 } };
+  const submit = (shift = false) => as('ed', () => {
+    h.findBar({}, { pane: 'ed' }); // the bar's key handler notes Shift before the input submits
+    h.back = shift; h.input.fire('submit', cx);
+  });
+  submit(); submit();
+  assert.equal(state.shared['ide-find'].ed.at, 2);
+  submit(); assert.equal(state.shared['ide-find'].ed.at, 0); // wraps
+  submit(true); assert.equal(state.shared['ide-find'].ed.at, 2);
+  assert.equal(state.clip, null); // nothing copied
+  assert.equal(h.finding, true); // the bar stays open
+  // A count for another query or file is ignored.
+  state.shared['ide-find.preview'] = { ed: { file: ':/b.md', query: 'herdr', count: 9 } };
+  assert.equal(as('ed', () => h.previewCount()), null);
+});
+
+test('over the source view, Enter still copies the line', async () => {
+  const { state, cx, header, as, settle, type, editor } = headers();
+  editor('/a.md');
+  const h = header('ed');
+  as('ed', () => h.open(cx)); state.reads.shift().resolve('one herdr'); await settle();
+  type(h, 'ed', 'herdr');
+  as('ed', () => h.input.fire('submit', cx));
+  assert.equal(state.clip, 'one herdr');
+});
+
+test('Esc on the page itself closes the bar: the editor drops the pane\'s search', async () => {
+  const { state, cx, header, as, settle, type, editor } = headers();
+  editor('/a.md');
+  state.shared['ide-editor.groups'].g.preview = [':/a.md'];
+  const h = header('ed');
+  as('ed', () => h.open(cx)); state.reads.shift().resolve('herdr'); await settle();
+  type(h, 'ed', 'herdr');
+  as('ed', () => h.render(cx));
+  assert.equal(h.finding, true); // its own search keeps it open
+  delete state.shared['ide-find'].ed; // what the editor's Esc does
+  as('ed', () => h.render(cx));
+  assert.equal(h.finding, false);
+  assert.equal(state.calls.at(-1).command, 'pane.focus');
+  as('ed', () => h.open(cx)); // reopening works again
+  as('ed', () => h.render(cx));
+  assert.equal(h.finding, true);
 });
