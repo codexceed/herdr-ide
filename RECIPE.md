@@ -147,6 +147,11 @@ Left to right, the same frame as Herdr's `main` layout:
   `TextView.markdown`, `image()`, `readTextFile`, `writeTextFile`, `exec`. Mermaid: `sh -c` runs
   `mmdc -t dark|default -b transparent -s 2` into
   `~/.config/herdr-app/data/ide-mermaid/<hash>.png`, then `sips` for its size.
+  Images: TextView draws none, so a line holding only `![alt](src)`, `<img>` or `<picture>`
+  (its `prefers-color-scheme` `<source>` for the theme) becomes its own part. `sh -c` copies
+  the file, relative to the page, into `data/ide-images/<cksum>.<ext>` (through
+  `hc exec --on` for another machine) and `image_size.py` reads its size from the header;
+  `image()` draws it, scaled down to the pane. Inline images and URLs stay Markdown.
   HTML: `sh -c` finds mermaid-cli's folder from `mmdc`, sets `NODE_PATH` to its
   `node_modules`, and runs `node mods/ide-editor/html_shot.cjs <page> <png> <width>
   dark|light` (puppeteer `headless: "shell"`, 2× scale, `networkidle0` up to 5 s, full-page
@@ -247,7 +252,8 @@ Left to right, the same frame as Herdr's `main` layout:
 - Mods have no web view and `TextView.html` drops CSS and SVG, so an HTML preview is a
   headless-Chrome screenshot: no interaction. The page starts in a 100px-tall viewport so
   its height is its content's; a page sized in `vh` lays out short.
-- `data/ide-html/` and `data/ide-mermaid/` are never pruned: each edit or width step adds a PNG.
+- `data/ide-html/`, `data/ide-mermaid/` and `data/ide-images/` are never pruned: each edit or width step adds a PNG.
+- A Markdown image is fetched once per session: an edit to the image file shows after a restart.
 - Without the Claude hook, two Claude terminals in the same folder show the same
   session's subagents.
 - `flex_shrink(value)` needs a number (`flex_shrink_1()` doesn't); `herdr-app check` won't

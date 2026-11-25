@@ -51,7 +51,10 @@ The mods run local programs and read outside their folder:
 - `ide-editor` reads the files you open and runs `mmdc` + `sips` to render diagrams into
   `~/.config/herdr-app/data/ide-mermaid/`, and `node` + headless Chrome (mermaid-cli's
   puppeteer) to render HTML previews into `~/.config/herdr-app/data/ide-html/`; **Open in
-  browser** runs `open -b <your default browser>` (`xdg-open` on Linux).
+  browser** runs `open -b <your default browser>` (`xdg-open` on Linux). Images a Markdown
+  page shows on their own line (`![](…)`, `<img>`, `<picture>`) are copied into
+  `~/.config/herdr-app/data/ide-images/` (with `hc exec … cat` from another machine) and sized
+  by `python3 image_size.py`.
 - `ide-files` runs `sh` to list folders and `git status` for change marks; **Download** runs
   `hc exec --on <machine> cat <file>` (or `cat` for a local file) into `~/Downloads` or the
   folder you pick.
