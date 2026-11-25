@@ -51,7 +51,9 @@ The mods run local programs and read outside their folder:
   `~/.config/herdr-app/data/ide-mermaid/`, and `node` + headless Chrome (mermaid-cli's
   puppeteer) to render HTML previews into `~/.config/herdr-app/data/ide-html/`; **Open in
   browser** runs `open -b <your default browser>` (`xdg-open` on Linux).
-- `ide-files` runs `sh` to list folders and `git status` for change marks.
+- `ide-files` runs `sh` to list folders and `git status` for change marks; **Download** runs
+  `hc exec --on <machine> cat <file>` (or `cat` for a local file) into `~/Downloads` or the
+  folder you pick.
 - `ide-open` runs `git ls-files` (outside a repo `rg --files` or `find`), `hc read` on the
   tab's terminals, and `sh` to check which printed paths exist.
 - `ide-agents` runs `python3 swarm.py`, which reads `~/.claude/projects/` and opens
@@ -64,6 +66,7 @@ The mods run local programs and read outside their folder:
 | Open a file as a tab | Click it in **Files** (tab bar → Files) |
 | Go to a file | ⌘P: fuzzy-find in the terminal's git repo; with no query it lists files the tab's terminals printed (⌘P, Enter opens what an agent just mentioned); `/…` or `~/…` opens any path. Herdr's tab picker moves to ⌥⌘P |
 | Files side by side | ⌘\\ or the split button in an editor pane |
+| Download a file (also from an SSH machine) | Right-click it in **Files** or its editor tab: **Download** saves to `~/Downloads` (`name (1).ext` if taken), **Download to…** asks for a folder |
 | Close a file tab | × , middle-click, or ⌘W in the editor pane |
 | Markdown or HTML preview ⇄ source | ⌘⇧V or the `</>` button |
 | Use an HTML page interactively | The ↗ button (HTML files): opens it in your default browser |

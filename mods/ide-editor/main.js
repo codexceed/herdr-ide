@@ -9,7 +9,7 @@
 // Find (cmd-f) lives in the pane header (mods/ide-pane); this pane lists its matches.
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, TextView } from "gpui-base";
-import { props, shared, setShared, focused, panes, run, exec, readTextFile, writeTextFile, notify, theme, settings, appHome, home, nextCommand } from "herdr";
+import { props, shared, setShared, focused, panes, run, exec, readTextFile, writeTextFile, notify, theme, settings, appHome, home, nextCommand, openOverlay } from "herdr";
 
 const KEY = "ide-editor.groups", ACTIVE = "ide-editor.active", MOD = "ide-editor", FIND = "ide-find";
 const LANG = { ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js", toml: "yaml", jsonc: "json", svelte: "html", vue: "html" };
@@ -336,6 +336,8 @@ export default class EditorGroup extends View {
           .hover(s => s.text_color(t.foreground))
           .on_click((_e, cx) => { this.activate(); this.edit(x => { x.active = k; }); cx.notify(); })
           .on_mouse_down("middle", (_e, cx) => { cx.stop_propagation(); this.closeTab(k); cx.notify(); })
+          // The Files panel's download menu (mods/ide-files fileMenu).
+          .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "ide-files", kind: "popup", width: 230, height: 108, props: { fileMenu: { path: tab.path, on: tab.on ?? null } } }); })
           .child(svg(`mods/${MOD}/${g.preview.includes(k) ? "preview" : "file"}.svg`).size(13).flex_none().text_color(t.dim))
           .child(div().max_w(220).truncate().child(nameOf(tab.path)))
           .child(div().id(`eg-close-${i}`).p(3).rounded(4).flex_none().text_color(on ? t.muted : t.dim)
