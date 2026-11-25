@@ -8,7 +8,6 @@ import datetime
 import os
 import re
 import shutil
-import tempfile
 import zipfile
 
 from openpyxl import Workbook
@@ -66,7 +65,7 @@ wb.save(OUT)
 # string with rich-text runs, as Excel does (openpyxl writes inline strings).
 SST = (b'<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="1">'
        b'<si><r><t>Nor</t></r><r><rPr><b/></rPr><t>th</t></r></si></sst>')
-tmp = tempfile.mktemp(suffix=".xlsx")
+tmp = OUT + ".part"  # beside OUT, so the move is a rename
 with zipfile.ZipFile(OUT) as src, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as dst:
     for item in src.infolist():
         data_ = src.read(item.filename)
