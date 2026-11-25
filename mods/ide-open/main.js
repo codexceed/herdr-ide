@@ -232,9 +232,23 @@ function context() {
 
 const typed = q => q.startsWith("/") || q.startsWith("~");
 
+// `~` means the home folder of the machine the files are on, not this computer's: on another
+// machine it's asked for once ($HOME there) and kept.
+const homes = new Map(); // machine -> Promise<string>
+function homeOn(on) {
+  if (!on) return Promise.resolve(home());
+  if (!homes.has(on)) homes.set(on, exec("sh", ["-c", 'printf %s "$HOME"'], { on })
+    .then(r => { if (r.code !== 0 || !r.stdout.startsWith("/")) throw new Error(r.stderr.trim() || "no $HOME"); return r.stdout; })
+    .catch(e => { homes.delete(on); throw e; }));
+  return homes.get(on);
+}
+
 export default class Open extends View {
   init(_props, cx) {
     this.ctx = context();
+    // Until a remote home is known, ~ is shown unexpanded and nothing is resolved against it.
+    this.home = this.ctx.on ? null : home();
+    if (this.ctx.on) cx.spawn(async cx => { try { this.home = await homeOn(this.ctx.on); this.firstMemo = null; } catch { /* go() retries */ } cx.notify(); });
     this.root = null; this.files = null; this.printed = []; this.error = null; this.notice = null;
     this.query = ""; this.at = 0; this.top = 0;
     this.gen = 0; this.found = null; this.last = null; this.enter = false;
@@ -276,7 +290,7 @@ export default class Open extends View {
 
   // Files the tab's terminals printed that exist, newest first (focused terminal first).
   async scan() {
-    const { on, terminals } = this.ctx, h = home();
+    const { on, terminals } = this.ctx, h = await homeOn(on).catch(() => null);
     const found = [];
     for (const { terminal, cwd } of terminals) {
       const r = await hc(["read", terminal, "--lines", String(HISTORY)]).catch(() => null);
@@ -301,7 +315,7 @@ export default class Open extends View {
   first() {
     const key = this.key();
     if (this.firstMemo?.key !== key) {
-      const h = home(), root = this.root;
+      const h = this.home, root = this.root;
       const item = (abs, tag, boost) => ({ abs, path: display(abs, root, h), tag, boost });
       this.firstMemo = { key, rows: [...this.printed.map(p => item(p, "terminal", 12)), ...this.recent().map(p => item(p, "recent", 6))] };
     }
@@ -356,9 +370,9 @@ export default class Open extends View {
 
   // Rows: { abs, path (as shown), hits, tag }. Cheap lists here; a query's come from search().
   rows() {
-    const q = this.query.trim(), h = home(), root = this.root;
+    const q = this.query.trim(), h = this.home, root = this.root;
     if (typed(q)) {
-      const abs = resolve(q, this.ctx.cwd, h);
+      const abs = h || !q.startsWith("~") ? resolve(q, this.ctx.cwd, h) : q;
       return [{ abs, path: display(abs, root, h), hits: [], tag: "path", typed: true }];
     }
     if (!q) return this.first().slice(0, SHOWN).map(x => ({ ...x, hits: [] }));
@@ -372,6 +386,10 @@ export default class Open extends View {
   async go(row) {
     if (!row) return;
     const { on, tab, pane } = this.ctx;
+    if (row.typed && row.abs.startsWith("~")) {
+      try { row = { ...row, abs: resolve(row.abs, this.ctx.cwd, await homeOn(on)) }; }
+      catch (e) { this.notice = `Can't find the home folder on ${on}: ${e.message ?? e}`; return; }
+    }
     if (row.typed) {
       const r = await exec("sh", ["-c", 'if [ -d "$1" ]; then echo dir; elif [ -f "$1" ]; then echo file; fi', "kind", row.abs], { on }).catch(() => null);
       const kind = r?.stdout.trim();
@@ -418,7 +436,7 @@ export default class Open extends View {
   }
 
   status(rows) {
-    const q = this.query.trim(), where = this.root ? display(this.root, null, home()) : "…";
+    const q = this.query.trim(), where = this.root ? display(this.root, null, this.home) : "…";
     if (this.notice) return this.notice;
     if (this.error) return this.error;
     if (typed(q)) return "Enter opens this path";
