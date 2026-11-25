@@ -321,26 +321,26 @@ test('image paths resolve against the page folder', () => {
   assert.equal(imagePath('/r/skill/SKILL.md', '/abs/x.png'), '/abs/x.png');
 });
 
-// The copy script, run for real by sh; a fake hc stands in for `hc exec --on box cat`.
+// The copy script, run for real by sh; a fake hc stands in for `hc exec --on box cat`. It runs
+// in a temp folder with relative paths only, so no absolute path reaches the shell.
 test('images are copied from this machine or through hc, then sized', () => {
   const { execFileSync } = require('node:child_process');
   const os = require('node:os');
   const { IMG } = harness();
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'img-')), bin = path.join(tmp, 'bin'), out = path.join(tmp, 'out');
-  fs.mkdirSync(bin);
-  fs.writeFileSync(path.join(bin, 'hc'), '#!/bin/sh\n[ "$1 $2 $3" = "exec --on box" ] || exit 9\nshift 7; exec cat -- "$@"\n', { mode: 0o755 });
-  const svgFile = path.join(tmp, 'Roles.SVG');
-  fs.writeFileSync(svgFile, '<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"\n  width="1522" height="848" viewBox="0 0 1522 848"></svg>');
-  const sizer = path.join(__dirname, '../mods/ide-editor/image_size.py');
-  const run = on => execFileSync('sh', ['-c', IMG, 'image', on, svgFile, out, sizer],
-    { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' }).trim().split(/\s+/);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'img-'));
+  fs.mkdirSync(path.join(tmp, 'bin'));
+  fs.writeFileSync(path.join(tmp, 'bin', 'hc'), '#!/bin/sh\n[ "$1 $2 $3" = "exec --on box" ] || exit 9\nshift 7; exec cat -- "$@"\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(tmp, 'Roles.SVG'), '<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"\n  width="1522" height="848" viewBox="0 0 1522 848"></svg>');
+  fs.copyFileSync(path.join(__dirname, '../mods/ide-editor/image_size.py'), path.join(tmp, 'image_size.py'));
+  const sh = (on, file, opts = {}) => execFileSync('sh', ['-c', IMG, 'image', on, file, 'out', 'image_size.py'],
+    { cwd: tmp, env: { HOME: tmp, PATH: 'bin:/usr/bin:/bin' }, encoding: 'utf8', ...opts });
   for (const on of ['', 'box']) {
-    const [name, w, h] = run(on);
+    const [name, w, h] = sh(on, 'Roles.SVG').trim().split(/\s+/);
     assert.match(name, /^\d+-\d+\.svg$/);
     assert.deepEqual([w, h], ['1522', '848']);
-    assert.equal(fs.readFileSync(path.join(out, name), 'utf8'), fs.readFileSync(svgFile, 'utf8'));
+    assert.equal(fs.readFileSync(path.join(tmp, 'out', name), 'utf8'), fs.readFileSync(path.join(tmp, 'Roles.SVG'), 'utf8'));
   }
-  assert.throws(() => execFileSync('sh', ['-c', IMG, 'image', '', path.join(tmp, 'missing.png'), out, sizer], { stdio: 'pipe' }));
-  assert.deepEqual(fs.readdirSync(out).filter(f => f.startsWith('.')), []); // no .part left behind
+  assert.throws(() => sh('', 'missing.png', { stdio: 'pipe' }));
+  assert.deepEqual(fs.readdirSync(path.join(tmp, 'out')).filter(f => f.startsWith('.')), []); // no .part left behind
   fs.rmSync(tmp, { recursive: true });
 });
