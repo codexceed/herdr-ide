@@ -94,13 +94,13 @@ test('fuzzy: hits point at the matched characters in the file name', () => {
 });
 
 // The popup with stubbed Herdr.
-function popup({ tick = 0, git = true, printed = '', printed2 = '', exists = [], recent = [], focus = 'term', files = 'README.md\0mods/ide-open/main.js\0sub/notes.md\0' } = {}) {
+function popup({ machine = null, tick = 0, git = true, printed = '', printed2 = '', exists = [], recent = [], focus = 'term', files = 'README.md\0mods/ide-open/main.js\0sub/notes.md\0' } = {}) {
   const state = { shared: { 'ide-open.recent': recent }, calls: [], closed: 0, execs: [], yields: 0 };
   const element = new Proxy({}, { get: () => () => element });
   const sandbox = {
     View: class {}, div: () => element, svg: () => element, v_flex: () => element, h_flex: () => element, Input: { new: () => element },
     InputState: { new: () => { const on = {}; return { on: (e, fn) => { on[e] = fn; }, fire: (e, cx) => on[e](null, cx), focus() {}, v: '', set_value(v) { this.v = v; }, value() { return this.v; } }; } },
-    spaces: () => [{ id: 's', active: true, folder: '/h/space', machine: null }],
+    spaces: () => [{ id: 's', active: true, folder: '/h/space', machine }],
     panes: () => [
       { pane: 'term', tab: 'tab', terminal: 't1', cwd: '/r/sub' },
       { pane: 'term2', tab: 'tab', terminal: 't2', cwd: '/other' },
@@ -113,6 +113,7 @@ function popup({ tick = 0, git = true, printed = '', printed2 = '', exists = [],
     hc: async args => ({ code: 0, stdout: args[1] === 't2' ? printed2 : printed, stderr: '' }),
     exec: async (cmd, args, opts) => {
       state.execs.push({ cmd, args, opts });
+      if (args[1]?.includes('$HOME')) return { code: 0, stdout: '/home/remote', stderr: '' };
       if (cmd === 'git' && args[0] === 'rev-parse') return git ? { code: 0, stdout: '/r\n', stderr: '' } : { code: 128, stdout: '', stderr: 'not a repo' };
       if (cmd === 'git') return { code: 0, stdout: files, stderr: '' };
       if (args[1]?.startsWith('for p;')) return { code: 0, stdout: args.slice(3).filter(p => exists.includes(p)).map(p => p + '\0').join(''), stderr: '' };
@@ -314,4 +315,20 @@ export default class Probe extends View {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('on another machine, ~ is that machine\'s home, not this computer\'s', async () => {
+  const { state, settle, type, enter } = popup({ machine: 'box', exists: ['/home/remote/x/book.xlsx'] });
+  await settle();
+  await type('~/x/book.xlsx');
+  await enter();
+  const split = state.calls.find(c => c.command === 'pane.split');
+  assert.equal(json(split.args.props.seed.tabs), json([{ path: '/home/remote/x/book.xlsx', on: 'box' }]));
+  assert.equal(state.execs.find(e => e.args[1]?.includes('[ -d')).args[3], '/home/remote/x/book.xlsx');
+});
+
+test('on another machine, a printed ~/ path resolves against that machine\'s home', async () => {
+  const { o, settle } = popup({ machine: 'box', printed: 'saved ~/x/out.md', exists: ['/home/remote/x/out.md'] });
+  await settle();
+  assert.equal(json(o.rows().map(r => [r.path, r.tag])), json([['~/x/out.md', 'terminal']]));
 });
