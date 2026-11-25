@@ -3,6 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
+// main.js imports sheet.js; the harness strips imports, so sheet.js is inlined ahead of it.
+const SHEET = fs.readFileSync(path.join(__dirname, '../mods/ide-editor/sheet.js'), 'utf8')
+  .replace(/^import .*;\n/gm, '').replace(/^export (const|function) /gm, '$1 ');
 
 function harness() {
   const state = { groups: {}, active: null, group: 'a', focus: 'pane-a', read: 'original', calls: [], panes: ['pane-a', 'pane-b'] };
@@ -21,7 +24,7 @@ function harness() {
     theme: () => ({}), settings: () => ({}), home: () => '/home/test',
     readTextFile: async () => { if (state.read instanceof Error) throw state.read; return state.read; },
   };
-  const source = fs.readFileSync(path.join(__dirname, '../mods/ide-editor/main.js'), 'utf8')
+  const source = SHEET + fs.readFileSync(path.join(__dirname, '../mods/ide-editor/main.js'), 'utf8')
     .replace(/^import .*;\n/gm, '').replace('export default class EditorGroup', 'class EditorGroup');
   const { EditorGroup: Group, mermaidError } = vm.runInNewContext(source + '\n({ EditorGroup, mermaidError });', sandbox);
   const context = { focus_handle: () => ({ focus() {}, is_focused: () => false }), spawn() {}, timer: { every() {} }, notify() {} };
@@ -50,7 +53,7 @@ test('a copy opened without a group (herdr-app check) saves nothing', () => {
   const sandbox = { View: class {}, div: () => null, svg: () => null, image: () => null, v_flex: () => null, h_flex: () => null,
     Editor: {}, TextView: {}, EditorState: {}, props: () => ({}), shared: () => undefined,
     setShared: () => { throw new Error('saved'); }, focused: () => null, panes: () => [], run() {}, theme: () => ({}), settings: () => ({}), home: () => '/' };
-  const source = fs.readFileSync(path.join(__dirname, '../mods/ide-editor/main.js'), 'utf8')
+  const source = SHEET + fs.readFileSync(path.join(__dirname, '../mods/ide-editor/main.js'), 'utf8')
     .replace(/^import .*;\n/gm, '').replace('export default class EditorGroup', 'class EditorGroup');
   const Group = vm.runInNewContext(source + '\nEditorGroup;', sandbox);
   assert.doesNotThrow(() => new Group().init({}, context));
@@ -151,7 +154,7 @@ function htmlGroup() {
     readTextFile: async p => state.disk?.[p] ?? null,
     notify: n => { notes.push(n); return 'n'; },
   };
-  const source = fs.readFileSync(path.join(__dirname, '../mods/ide-editor/main.js'), 'utf8')
+  const source = SHEET + fs.readFileSync(path.join(__dirname, '../mods/ide-editor/main.js'), 'utf8')
     .replace(/^import .*;\n/gm, '').replace('export default class EditorGroup', 'class EditorGroup');
   const Group = vm.runInNewContext(source + '\nEditorGroup;', sandbox);
   const g = new Group();
@@ -270,3 +273,4 @@ test('a failed remote copy shows as a preview error too', async () => {
   const p = g.htmlPage(tab, '<p>x', cx);
   assert.equal(p.state, 'error'); assert.match(p.error, /No space/);
 });
+

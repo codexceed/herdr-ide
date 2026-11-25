@@ -44,7 +44,8 @@ folder that no other terminal shows. For a match that never guesses, add this to
 
 ### What it touches
 
-No network access of their own (an HTML preview loads whatever the page itself links to).
+No network access of their own (an HTML preview loads whatever the page itself links to;
+opening a `.gsheet` asks Google for that one sheet).
 The mods run local programs and read outside their folder:
 
 - `ide-editor` reads the files you open and runs `mmdc` + `sips` to render diagrams into
@@ -54,6 +55,10 @@ The mods run local programs and read outside their folder:
 - `ide-files` runs `sh` to list folders and `git status` for change marks; **Download** runs
   `hc exec --on <machine> cat <file>` (or `cat` for a local file) into `~/Downloads` or the
   folder you pick.
+- `ide-editor` runs `python3 xlsx_read.py` (stdlib only) to read workbooks; one on another
+  machine is first copied to `~/.config/herdr-app/data/ide-sheets/` with `hc exec … cat`,
+  and checked for changes every 3 s with `stat`. A `.gsheet` stub makes one request to
+  `docs.google.com` to export that sheet as `.xlsx`.
 - `ide-open` runs `git ls-files` (outside a repo `rg --files` or `find`), `hc read` on the
   tab's terminals, and `sh` to check which printed paths exist.
 - `ide-agents` runs `python3 swarm.py`, which reads `~/.claude/projects/` and opens
@@ -68,6 +73,7 @@ The mods run local programs and read outside their folder:
 | Files side by side | ⌘\\ or the split button in an editor pane |
 | Download a file (also from an SSH machine) | Right-click it in **Files** or its editor tab: **Download** saves to `~/Downloads` (`name (1).ext` if taken), **Download to…** asks for a folder |
 | Close a file tab | × , middle-click, or ⌘W in the editor pane |
+| View a spreadsheet | Open an `.xlsx` / `.xlsm` (also over SSH): an Excel-style grid with the formula bar, frozen panes, merged cells, formats and colors, and sheet tabs along the bottom. Click a cell or use the arrows, Tab, Enter and Page Up/Down; ⌘C copies the cell. A Google Drive `.gsheet` shows the sheet if it's shared by link, else an **Open in Google Sheets** button |
 | Markdown or HTML preview ⇄ source | ⌘⇧V or the `</>` button |
 | Use an HTML page interactively | The ↗ button (HTML files): opens it in your default browser |
 | Find in a terminal | ⌘F: Herdr's find bar searches the screen and history, highlights each hit and scrolls to it; Enter / Shift-Enter or its arrows step |
