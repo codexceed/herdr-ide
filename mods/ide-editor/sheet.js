@@ -127,6 +127,10 @@ export function moveSel(view, book, dr, dc, size) {
   if (!sheet) return;
   const p = prepare(sheet, book.styles);
   let { r, c } = view.sel;
+  // Leave a merge from its far edge: from its top-left, one step right or down lands back in it.
+  const own = p.merges.get(`${r},${c}`);
+  if (own && dr > 0) r = own[2];
+  if (own && dc > 0) c = own[3];
   const step = (v, d, sizeOf) => { do v += d; while (v > 0 && sizeOf(v) === 0); return Math.max(0, v); };
   if (dr) r = step(r, Math.sign(dr), p.R.size) + (Math.abs(dr) > 1 ? dr - Math.sign(dr) : 0);
   if (dc) c = step(c, Math.sign(dc), p.Co.size);

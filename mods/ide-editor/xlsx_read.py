@@ -20,6 +20,7 @@ import datetime
 import decimal
 import json
 import math
+import os
 import posixpath
 import re
 import sys
@@ -241,7 +242,9 @@ def format_number(v, toks):
         dec = sum(1 for ch in dec_part if ch in "0#?")
         min_dec = sum(1 for ch in dec_part if ch == "0")
         # Excel rounds halves away from zero; Python's format rounds them to even.
-        s = format(decimal.Decimal(repr(abs(v))).quantize(decimal.Decimal(1).scaleb(-dec), decimal.ROUND_HALF_UP), "f")
+        # The default 28 digits can't hold 1e30 to two places; a double needs at most 309 + dec.
+        ctx = decimal.Context(prec=330 + dec)
+        s = format(decimal.Decimal(repr(abs(v))).quantize(decimal.Decimal(1).scaleb(-dec), decimal.ROUND_HALF_UP, ctx), "f")
         whole, _, frac = s.partition(".")
         frac = frac.rstrip("0").ljust(min_dec, "0") if dec > min_dec else frac
         min_int = int_part.count("0")
@@ -553,6 +556,7 @@ def gsheet(stub, cache):
         return {"error": f"Couldn't export this Google Sheet ({e})", "url": url}
     if not data.startswith(b"PK"):
         return {"error": "This Google Sheet isn't shared by link, so it can only be viewed in Google Sheets", "url": url}
+    os.makedirs(os.path.dirname(cache) or ".", exist_ok=True)  # a local stub's first export
     with open(cache, "wb") as f:
         f.write(data)
     out = read_workbook(cache)

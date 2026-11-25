@@ -53,6 +53,14 @@ test('arrows skip hidden columns and land on a merge\'s top-left cell', () => {
   assert.deepEqual({ ...view.sel }, { r: 5, c: 0 });
 });
 
+test('right / down from a merge leave it past its far edge; left / up land back on it', () => {
+  const { moveSel } = load(), b = book(), view = { sheet: 1, sx: 0, sy: 0, sel: { r: 5, c: 0 } };
+  moveSel(view, b, 0, 1, null); assert.deepEqual({ ...view.sel }, { r: 5, c: 3 });
+  moveSel(view, b, 0, -1, null); assert.deepEqual({ ...view.sel }, { r: 5, c: 0 });
+  moveSel(view, b, 1, 0, null); assert.deepEqual({ ...view.sel }, { r: 7, c: 0 });
+  moveSel(view, b, -1, 0, null); assert.deepEqual({ ...view.sel }, { r: 5, c: 0 });
+});
+
 test('moving the selection scrolls it into view, and scrolling stays in bounds', () => {
   const { moveSel, scrollBy } = load(), b = book(), size = { width: 400, height: 300 };
   const view = { sheet: 1, sx: 0, sy: 0, sel: { r: 0, c: 0 } };

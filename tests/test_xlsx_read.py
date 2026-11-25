@@ -31,6 +31,11 @@ class Formats(unittest.TestCase):
         self.assertEqual(fmt(12345, "0.00E+00"), "1.23E+04")
         self.assertEqual(fmt(1500000, '#,##0.0,,"M"'), "1.5M")
 
+    def test_huge_numbers_keep_fixed_point(self):
+        # Beyond Decimal's default 28 digits: 1e30 to two places once raised InvalidOperation.
+        self.assertEqual(fmt(1e30, "#,##0.00"), "1,000,000,000,000,000,000,000,000,000,000.00")
+        self.assertTrue(fmt(1.7e308, "0.00").endswith(".00"))
+
     def test_sections_and_colors(self):
         code = '"$"#,##0.00;[Red]-"$"#,##0.00'
         self.assertEqual(xlsx_read.format_value(-9876.5, code, False), ("-$9,876.50", "#FF0000"))
@@ -97,3 +102,21 @@ class Fixture(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GoogleSheet(unittest.TestCase):
+    def test_a_local_stub_creates_the_export_folder(self):
+        from unittest import mock
+        book = open(BOOK, "rb").read()
+        with tempfile.TemporaryDirectory() as d:
+            stub = os.path.join(d, "a.gsheet")
+            with open(stub, "w") as f:
+                json.dump({"doc_id": "abc"}, f)
+            cache = os.path.join(d, "data", "ide-sheets", "a.export.xlsx")  # folder not made yet
+            reply = mock.MagicMock()
+            reply.__enter__.return_value.read.return_value = book
+            with mock.patch.object(xlsx_read.urllib.request, "urlopen", return_value=reply):
+                out = xlsx_read.gsheet(stub, cache)
+            self.assertNotIn("error", out)
+            self.assertTrue(os.path.exists(cache))
+            self.assertIn("/d/abc/", out["url"])
