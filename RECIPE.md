@@ -54,6 +54,15 @@ Left to right, the same frame as Herdr's `main` layout:
   - the file as a read-only code view with line numbers and syntax colors, or rendered
     markdown (24px side padding, 14px text in the system UI font) with diagrams as centered
     images, or an HTML file as a picture of the page at the pane's full width.
+  - a spreadsheet (`.xlsx`, `.xlsm`, `.gsheet`) as an Excel-style grid (`sheet.js`, data from
+    `xlsx_read.py`): a 28px formula bar (cell name, `fx`, the formula or value), 20px column
+    letters and row numbers that stay put, frozen panes, merged cells, fills, font styles and
+    colors, borders, number and date formats (`#####` when a number doesn't fit), text spilling
+    into empty neighbours, auto-fit heights for wrapped rows, hidden rows, columns and sheets
+    left out, and 30px sheet tabs (tab colors as a dot). Cells are always Excel's light colors.
+    The view draws only what's on screen and scrolls itself (wheel; arrows, Tab, Enter, Page
+    Up/Down move the selection); at most 150k cells are read. A `.gsheet` exports through
+    Google if the sheet is shared by link, else offers **Open in Google Sheets**.
 - **Files panel** on the right (`ide-files`, hidden until the tab bar's Files button):
   the focused pane's folder as a lazy tree with git marks (A / M / D / U). Right-clicking a
   file (or an editor tab) opens a 230×108 popup (`ide-files` with `props.fileMenu`):

@@ -10,6 +10,7 @@
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Editor, EditorState, TextView } from "gpui-base";
 import { props, shared, setShared, focused, panes, run, exec, readTextFile, writeTextFile, notify, theme, settings, appHome, home, nextCommand, openOverlay } from "herdr";
+import { isSheet, sheetView, initialView, scrollBy, moveSel, cellContent } from "./sheet.js";
 
 const KEY = "ide-editor.groups", ACTIVE = "ide-editor.active", MOD = "ide-editor", FIND = "ide-find";
 const LANG = { ts: "js", tsx: "js", mts: "js", cts: "js", jsx: "js", mjs: "js", toml: "yaml", jsonc: "json", svelte: "html", vue: "html" };
@@ -68,6 +69,16 @@ except Exception: h = []
 print(next((x.get("LSHandlerRoleAll", "") for x in h if x.get("LSHandlerURLScheme") == "https"), ""))')
   open -b "\${b:-com.apple.Safari}" "$1"
 else xdg-open "$1"; fi`;
+
+// Spreadsheets (.xlsx, .xlsm, a Google Drive .gsheet stub): a file on another machine is copied
+// here first (hc exec … cat), then xlsx_read.py turns it into JSON for sheet.js. A stat of the
+// file every few seconds (size and mtime) decides when to read it again.
+const SHEET_DIR = "data/ide-sheets";
+const SHEET = `if [ -n "$1" ]; then hc=$(command -v hc || echo "$HOME/.local/bin/hc"); mkdir -p "$(dirname "$3")"
+  "$hc" exec --on "$1" --timeout 600 cat -- "$2" > "$3.part" || { rm -f "$3.part"; exit 1; }
+  mv "$3.part" "$3"; f=$3; else f=$2; fi
+case "$5" in gsheet) exec python3 "$4" --gsheet "$f" "$3.export.xlsx";; *) exec python3 "$4" "$f";; esac`;
+const STAT = `stat -c '%s %Y' -- "$1" 2>/dev/null || stat -f '%z %m' -- "$1"`;
 
 export default class EditorGroup extends View {
   init(_props, cx) {
@@ -170,6 +181,7 @@ export default class EditorGroup extends View {
     const d = this.docs.get(k) ?? { loading: true };
     this.docs.set(k, d);
     d.loading = true;
+    if (isSheet(tab.path)) return this.loadSheet(tab, d, cx);
     const fail = message => {
       d.code?.release();
       d.code = null; d.text = null; d.error = message;
@@ -191,6 +203,53 @@ export default class EditorGroup extends View {
       } catch { fail("Cannot open this file (binary, too large, or unreadable)"); }
       finally { d.loading = false; cx.notify(); }
     });
+  }
+
+  loadSheet(tab, d, cx) {
+    cx.spawn(async cx => {
+      try {
+        const st = await exec("sh", ["-c", STAT, "stat", tab.path], { on: tab.on });
+        if (st.code !== 0) { Object.assign(d, { book: null, error: "This file is no longer available" }); return; }
+        if (st.stdout === d.sig) return;
+        const cache = `${appHome()}/${SHEET_DIR}/${hash(`${tab.on ?? ""}:${tab.path}`)}.${tab.path.split(".").pop()}`;
+        const r = await exec("sh", ["-c", SHEET, "sheet", tab.on ?? "", tab.path, cache, `${appHome()}/mods/${MOD}/xlsx_read.py`,
+          /\.gsheet$/i.test(tab.path) ? "gsheet" : "xlsx"], { timeout: 600000 });
+        if (r.code !== 0) throw new Error(r.stderr.trim() || `exit ${r.code}`);
+        const book = JSON.parse(r.stdout);
+        d.sig = st.stdout;
+        if (book.error) { Object.assign(d, { book: null, error: book.error, url: book.url ?? null }); return; }
+        const old = d.view;
+        d.book = book; d.error = null; d.url = book.url ?? null;
+        d.view = old && book.sheets[old.sheet] ? old : initialView(book);
+      } catch (e) { Object.assign(d, { book: null, error: `Cannot open this workbook: ${e.message ?? e}` }); }
+      finally { d.loading = false; cx.notify(); }
+    });
+  }
+
+  // Arrow keys, Page Up/Down, Home and ⌘C on the shown sheet. True when it took the key.
+  sheetKey(e, d) {
+    const { key, modifiers: m } = e, size = this.sheetSize;
+    if ((m.platform || m.control) && key === "c") return "copy";
+    const page = Math.max(1, Math.floor(((size?.height ?? 400) - 80) / 20));
+    const moves = { up: [-1, 0], down: [1, 0], left: [0, -1], right: [0, 1], tab: [0, m.shift ? -1 : 1], enter: [m.shift ? -1 : 1, 0], pageup: [-page, 0], pagedown: [page, 0] };
+    if (key === "home") { d.view.sel = { r: d.view.sel.r, c: 0 }; d.view.sx = 0; return true; }
+    if (!moves[key]) return false;
+    moveSel(d.view, d.book, moves[key][0], moves[key][1], size);
+    return true;
+  }
+
+  sheet(d, t, cx) {
+    return v_flex().id("eg-sheet").flex_1().min_h(0)
+      .on_size_change((size, cx) => { if (size.width !== this.sheetSize?.width || size.height !== this.sheetSize?.height) { this.sheetSize = size; cx.notify(); } })
+      .child(sheetView({
+        book: d.book, view: d.view, size: this.sheetSize, font: PREVIEW_FONT, t,
+        onPick: (r, c, cx) => { this.activate(); this.handle.focus(); d.view.sel = { r, c }; cx.notify(); },
+        onSheet: (i, cx) => { this.activate(); d.view = { ...initialView(d.book), sheet: i }; cx.notify(); },
+        onScroll: (e, cx) => {
+          const dx = e.modifiers?.shift ? -e.delta.y : -e.delta.x, dy = e.modifiers?.shift ? 0 : -e.delta.y;
+          scrollBy(d.view, d.book, dx, dy, this.sheetSize); cx.notify();
+        },
+      }));
   }
 
   // Pick up edits made on disk to the shown file.
@@ -349,6 +408,9 @@ export default class EditorGroup extends View {
         .when(canPreview(g.tabs.find(x => keyOf(x) === g.active)?.path), el => el.child(
           this.iconButton(t, "eg-md", g.preview.includes(g.active) ? "source" : "preview",
             "Toggle preview (⌘⇧V)", () => { this.activate(); this.togglePreview(g.active); })))
+        .when(Boolean(this.docs.get(g.active)?.url), el => el.child(
+          this.iconButton(t, "eg-gsheet", "browser", "Open in Google Sheets",
+            cx => { this.activate(); cx.open_url(this.docs.get(g.active).url); })))
         .when(isHtml(g.tabs.find(x => keyOf(x) === g.active)?.path), el => el.child(
           this.iconButton(t, "eg-browser", "browser", "Open in browser",
             cx => { this.activate(); const tab = g.tabs.find(x => keyOf(x) === g.active); if (tab) this.openInBrowser(tab, cx); })))
@@ -380,12 +442,24 @@ export default class EditorGroup extends View {
     return v_flex().id("eg").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(13)
       .track_focus(this.handle)
       .on_mouse_down("left", () => this.activate())
+      .on_key_down((e, cx) => {
+        if (!d?.book || !d.view) return;
+        const took = this.sheetKey(e, d);
+        if (took === "copy") { cx.write_to_clipboard(cellContent(d.book, d.view)); notify({ title: "Copied cell", level: "success", timeout: 1500 }); }
+        if (took) { cx.stop_propagation(); cx.notify(); }
+      })
       .child(this.tabStrip(g, t))
       .when(Boolean(tab), el => el.child(h_flex().h(24).flex_none().px(12).items_center().text_size(11).text_color(t.dim)
         .child(div().flex_1().min_w(0).truncate().child(rel))))
       .when(Boolean(this.findList(t)), el => el.child(this.findList(t)))
       .child(!tab
         ? v_flex().flex_1().items_center().justify_center().text_color(t.dim).child("No open files · pick one in Files")
+        : d?.book ? this.sheet(d, t, cx)
+        : isSheet(tab.path) ? v_flex().flex_1().p(12).gap(10).text_size(12.5).text_color(d?.error ? t.ansi1 : t.dim)
+            .child(div().child(d?.error || "Reading workbook…"))
+            .when(Boolean(d?.url), el => el.child(div().id("eg-gsheet-open").flex_none().px(10).py(5).rounded(6).cursor_pointer()
+              .bg(t.solid).text_color(t.solid_foreground).hover(s => s.opacity(0.9))
+              .on_click((_e, cx) => cx.open_url(d.url)).child("Open in Google Sheets")))
         : preview && isHtml(tab.path)
           ? v_flex().id(`eg-html-${k}`).flex_1().min_h(0).overflow_y_scrollbar()
               .on_size_change((size, cx) => { if (size.width !== this.width) { this.width = size.width; cx.notify(); } })
